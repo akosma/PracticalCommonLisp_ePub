@@ -1,0 +1,571 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.01//EN">
+<html>
+    <head>
+        <title>
+            Object Reorientation: Classes
+        </title>
+        <link rel="stylesheet" type="text/css" href="style.css">
+    </head>
+    <body>
+        <h1>
+            17. Object Reorientation: Classes
+        </h1>
+        <p>
+            If generic functions are the verbs of the object system, classes are the nouns. As I mentioned in the previous chapter, all values in a Common Lisp program are instances of some class. Furthermore, all classes are organized into a single hierarchy rooted at the class <code><b>T</b></code>.
+        </p>
+        <p>
+            The class hierarchy consists of two major families of classes, built-in and user-defined classes. Classes that represent the data types you've been learning about up until now, classes such as <code><b>INTEGER</b></code>, <code><b>STRING</b></code>, and <code><b>LIST</b></code>, are all built-in. They live in their own section of the class hierarchy, arranged into appropriate sub- and superclass relationships, and are manipulated by the functions I've been discussing for much of the book up until now. You can't subclass these classes, but, as you saw in the previous chapter, you can define methods that specialize on them, effectively extending the behavior of those classes.<sup>1</sup>
+        </p>
+        <p>
+            But when you want to create new nouns--for instance, the classes used in the previous chapter for representing bank accounts--you need to define your own classes. That's the subject of this chapter.
+        </p>
+        <h2>
+            <a name="defclass" id="defclass">DEFCLASS</a>
+        </h2>
+        <p>
+            You create user-defined classes with the <code><b>DEFCLASS</b></code> macro. Because behaviors are associated with a class by defining generic functions and methods specialized on the class, <code><b>DEFCLASS</b></code> is responsible only for defining the class as a data type.
+        </p>
+        <p>
+            The three facets of the class as a data type are its name, its relation to other classes, and the names of the slots that make up instances of the class.<sup>2</sup> The basic form of a <code><b>DEFCLASS</b></code> is quite simple.
+        </p>
+        <pre>
+(defclass <i>name</i> (<i>direct-superclass-name</i>*)
+  (<i>slot-specifier</i>*))
+</pre>
+        <div class="sidebarhead">
+            What Are "User-Defined Classes"?
+        </div>
+        <div class="sidebar">
+            <p>
+                The term <i>user-defined classes</i> isn't a term from the language standard--technically what I'm talking about when I say <i>user-defined classes</i> are classes that subclass <code><b>STANDARD-OBJECT</b></code> and whose metaclass is <code><b>STANDARD-CLASS</b></code>. But since I'm not going to talk about the ways you can define classes that don't subclass <code><b>STANDARD-OBJECT</b></code> and whose metaclass isn't <code><b>STANDARD-CLASS</b></code>, you don't really have to worry about that. <i>User-defined</i> isn't a perfect term for these classes since the implementation may define certain classes the same way. However, to call them <i>standard</i> classes would be even more confusing since the built-in classes, such as <code><b>INTEGER</b></code> and <code><b>STRING</b></code>, are just as standard, if not more so, because they're defined by the language standard but they don't extend <code><b>STANDARD-OBJECT</b></code>. To further complicate matters, it's also possible for users to define new classes that <i>don't</i> subclass <code><b>STANDARD-OBJECT</b></code>. In particular, the macro <code><b>DEFSTRUCT</b></code> also defines new classes. But that's largely for backward compatibility--<code><b>DEFSTRUCT</b></code> predated CLOS and was retrofitted to define classes when CLOS was integrated into the language. But the classes it creates are fairly limited compared to <code><b>DEFCLASS</b></code>ed classes. So in this chapter I'll be discussing only classes defined with <code><b>DEFCLASS</b></code> that use the default metaclass of <code><b>STANDARD-CLASS</b></code>, and I'll refer to them as <i>user-defined</i> for lack of a better term.
+            </p>
+        </div>
+        <p>
+            As with functions and variables, you can use any symbol as the name of a new class.<sup>3</sup> Class names are in a separate namespace from both functions and variables, so you can have a class, function, and variable all with the same name. You'll use the class name as the argument to <code><b>MAKE-INSTANCE</b></code>, the function that creates new instances of user-defined classes.
+        </p>
+        <p>
+            The <i>direct-superclass-names</i> specify the classes of which the new class is a subclass. If no superclasses are listed, the new class will directly subclass <code><b>STANDARD-OBJECT</b></code>. Any classes listed must be other user-defined classes, which ensures that each new class is ultimately descended from <code><b>STANDARD-OBJECT</b></code>. <code><b>STANDARD-OBJECT</b></code> in turn subclasses <code><b>T</b></code>, so all user-defined classes are part of the single class hierarchy that also contains all the built-in classes.
+        </p>
+        <p>
+            Eliding the slot specifiers for a moment, the <code><b>DEFCLASS</b></code> forms of some of the classes you used in the previous chapter might look like this:
+        </p>
+        <pre>
+(defclass bank-account () ...)
+
+(defclass checking-account (bank-account) ...)
+
+(defclass savings-account (bank-account) ...)
+</pre>
+        <p>
+            I'll discuss in the section "Multiple Inheritance" what it means to list more than one direct superclass in <i>direct-superclass-names</i>.
+        </p>
+        <h2>
+            <a name="slot-specifiers" id="slot-specifiers">Slot Specifiers</a>
+        </h2>
+        <p>
+            The bulk of a <code><b>DEFCLASS</b></code> form consists of the list of slot specifiers. Each slot specifier defines a slot that will be part of each instance of the class. Each slot in an instance is a place that can hold a value, which can be accessed using the <code><b>SLOT-VALUE</b></code> function. <code><b>SLOT-VALUE</b></code> takes an object and the name of a slot as arguments and returns the value of the named slot in the given object. It can be used with <code><b>SETF</b></code> to set the value of a slot in an object.
+        </p>
+        <p>
+            A class also inherits slot specifiers from its superclasses, so the set of slots actually present in any object is the union of all the slots specified in a class's <code><b>DEFCLASS</b></code> form and those specified in all its superclasses.
+        </p>
+        <p>
+            At the minimum, a slot specifier names the slot, in which case the slot specifier can be just a name. For instance, you could define a <code>bank-account</code> class with two slots, <code>customer-name</code> and <code>balance</code>, like this:
+        </p>
+        <pre>
+(defclass bank-account ()
+  (customer-name
+   balance))
+</pre>
+        <p>
+            Each instance of this class will contain two slots, one to hold the name of the customer the account belongs to and another to hold the current balance. With this definition, you can create new <code>bank-account</code> objects using <code><b>MAKE-INSTANCE</b></code>.
+        </p>
+        <pre>
+(make-instance 'bank-account) ==&gt; #&lt;BANK-ACCOUNT @ #x724b93ba&gt;
+</pre>
+        <p>
+            The argument to <code><b>MAKE-INSTANCE</b></code> is the name of the class to instantiate, and the value returned is the new object.<sup>4</sup> The printed representation of an object is determined by the generic function <code><b>PRINT-OBJECT</b></code>. In this case, the applicable method will be one provided by the implementation, specialized on <code><b>STANDARD-OBJECT</b></code>. Since not every object can be printed so that it can be read back, the <code><b>STANDARD-OBJECT</b></code> print method uses the <code>#&lt;&gt;</code> syntax, which will cause the reader to signal an error if it tries to read it. The rest of the representation is implementation-defined but will typically be something like the output just shown, including the name of the class and some distinguishing value such as the address of the object in memory. In Chapter 23 you'll see an example of how to define a method on <code><b>PRINT-OBJECT</b></code> to make objects of a certain class be printed in a more informative form.
+        </p>
+        <p>
+            Using the definition of <code>bank-account</code> just given, new objects will be created with their slots <i>unbound</i>. Any attempt to get the value of an unbound slot signals an error, so you must set a slot before you can read it.
+        </p>
+        <pre>
+(defparameter *account* (make-instance 'bank-account))  ==&gt; *ACCOUNT*
+(setf (slot-value *account* 'customer-name) "John Doe") ==&gt; "John Doe"
+(setf (slot-value *account* 'balance) 1000)             ==&gt; 1000
+</pre>
+        <p>
+            Now you can access the value of the slots.
+        </p>
+        <pre>
+(slot-value *account* 'customer-name) ==&gt; "John Doe"
+(slot-value *account* 'balance)       ==&gt; 1000
+</pre>
+        <h2>
+            <a name="object-initialization" id="object-initialization">Object Initialization</a>
+        </h2>
+        <p>
+            Since you can't do much with an object with unbound slots, it'd be nice to be able to create objects with their slots already initialized. Common Lisp provides three ways to control the initial value of slots. The first two involve adding options to the slot specifier in the <code><b>DEFCLASS</b></code> form: with the <code>:initarg</code> option, you can specify a name that can then be used as a keyword parameter to <code><b>MAKE-INSTANCE</b></code> and whose argument will be stored in the slot. A second option, <code>:initform</code>, lets you specify a Lisp expression that will be used to compute a value for the slot if no <code>:initarg</code> argument is passed to <code><b>MAKE-INSTANCE</b></code>. Finally, for complete control over the initialization, you can define a method on the generic function <code><b>INITIALIZE-INSTANCE</b></code>, which is called by <code><b>MAKE-INSTANCE</b></code>.<sup>5</sup>
+        </p>
+        <p>
+            A slot specifier that includes options such as <code>:initarg</code> or <code>:initform</code> is written as a list starting with the name of the slot followed by the options. For example, if you want to modify the definition of <code>bank-account</code> to allow callers of <code><b>MAKE-INSTANCE</b></code> to pass the customer name and the initial balance and to provide a default value of zero dollars for the balance, you'd write this:
+        </p>
+        <pre>
+(defclass bank-account ()
+  ((customer-name
+    :initarg :customer-name)
+   (balance
+    :initarg :balance
+    :initform 0)))
+</pre>
+        <p>
+            Now you can create an account and specify the slot values at the same time.
+        </p>
+        <pre>
+(defparameter *account*
+  (make-instance 'bank-account :customer-name "John Doe" :balance 1000))
+
+(slot-value *account* 'customer-name) ==&gt; "John Doe"
+(slot-value *account* 'balance)       ==&gt; 1000
+</pre>
+        <p>
+            If you don't supply a <code>:balance</code> argument to <code><b>MAKE-INSTANCE</b></code>, the <code><b>SLOT-VALUE</b></code> of <code>balance</code> will be computed by evaluating the form specified with the <code>:initform</code> option. But if you don't supply a <code>:customer-name</code> argument, the <code>customer-name</code> slot will be unbound, and an attempt to read it before you set it will signal an error.
+        </p>
+        <pre>
+(slot-value (make-instance 'bank-account) 'balance)       ==&gt; 0
+(slot-value (make-instance 'bank-account) 'customer-name) ==&gt; <i>error</i>
+</pre>
+        <p>
+            If you want to ensure that the customer name is supplied when the account is created, you can signal an error in the initform since it will be evaluated only if an initarg isn't supplied. You can also use initforms that generate a different value each time they're evaluated--the initform is evaluated anew for each object. To experiment with these techniques, you can modify the <code>customer-name</code> slot specifier and add a new slot, <code>account-number</code>, that's initialized with the value of an ever-increasing counter.
+        </p>
+        <pre>
+(defvar *account-numbers* 0)
+
+(defclass bank-account ()
+  ((customer-name
+    :initarg :customer-name
+    :initform (error "Must supply a customer name."))
+   (balance
+    :initarg :balance
+    :initform 0)
+   (account-number
+    :initform (incf *account-numbers*))))
+</pre>
+        <p>
+            Most of the time the combination of <code>:initarg</code> and <code>:initform</code> options will be sufficient to properly initialize an object. However, while an initform can be any Lisp expression, it has no access to the object being initialized, so it can't initialize one slot based on the value of another. For that you need to define a method on the generic function <code><b>INITIALIZE-INSTANCE</b></code>.
+        </p>
+        <p>
+            The primary method on <code><b>INITIALIZE-INSTANCE</b></code> specialized on <code><b>STANDARD-OBJECT</b></code> takes care of initializing slots based on their <code>:initarg</code> and <code>:initform</code> options. Since you don't want to disturb that, the most common way to add custom initialization code is to define an <code>:after</code> method specialized on your class.<sup>6</sup> For instance, suppose you want to add a slot <code>account-type</code> that needs to be set to one of the values <code>:gold</code>, <code>:silver</code>, or <code>:bronze</code> based on the account's initial balance. You might change your class definition to this, adding the <code>account-type</code> slot with no options:
+        </p>
+        <pre>
+(defclass bank-account ()
+  ((customer-name
+    :initarg :customer-name
+    :initform (error "Must supply a customer name."))
+   (balance
+    :initarg :balance
+    :initform 0)
+   (account-number
+    :initform (incf *account-numbers*))
+   account-type))
+</pre>
+        <p>
+            Then you can define an <code>:after</code> method on <code><b>INITIALIZE-INSTANCE</b></code> that sets the <code>account-type</code> slot based on the value that has been stored in the <code>balance</code> slot.<sup>7</sup>
+        </p>
+        <pre>
+(defmethod initialize-instance :after ((account bank-account) &amp;key)
+  (let ((balance (slot-value account 'balance)))
+    (setf (slot-value account 'account-type)
+          (cond
+            ((&gt;= balance 100000) :gold)
+            ((&gt;= balance 50000) :silver)
+            (t :bronze)))))
+</pre>
+        <p>
+            The <code><b>&amp;key</b></code> in the parameter list is required to keep the method's parameter list congruent with the generic function's--the parameter list specified for the <code><b>INITIALIZE-INSTANCE</b></code> generic function includes <code><b>&amp;key</b></code> in order to allow individual methods to supply their own keyword parameters but doesn't require any particular ones. Thus, every method must specify <code><b>&amp;key</b></code> even if it doesn't specify any <code><b>&amp;key</b></code> parameters.
+        </p>
+        <p>
+            On the other hand, if an <code><b>INITIALIZE-INSTANCE</b></code> method specialized on a particular class does specify a <code><b>&amp;key</b></code> parameter, that parameter becomes a legal parameter to <code><b>MAKE-INSTANCE</b></code> when creating an instance of that class. For instance, if the bank sometimes pays a percentage of the initial balance as a bonus when an account is opened, you could implement that using a method on <code><b>INITIALIZE-INSTANCE</b></code> that takes a keyword argument to specify the percentage of the bonus like this:
+        </p>
+        <pre>
+(defmethod initialize-instance :after ((account bank-account)
+                                       &amp;key opening-bonus-percentage)
+  (when opening-bonus-percentage
+    (incf (slot-value account 'balance)
+          (* (slot-value account 'balance) (/ opening-bonus-percentage 100)))))
+</pre>
+        <p>
+            By defining this <code><b>INITIALIZE-INSTANCE</b></code> method, you make <code>:opening-bonus-percentage</code> a legal argument to <code><b>MAKE-INSTANCE</b></code> when creating a <code>bank-account</code> object.
+        </p>
+        <pre>
+CL-USER&gt; (defparameter *acct* (make-instance
+                                'bank-account
+                                 :customer-name "Sally Sue"
+                                 :balance 1000
+                                 :opening-bonus-percentage 5))
+*ACCT*
+CL-USER&gt; (slot-value *acct* 'balance)
+1050
+</pre>
+        <h2>
+            <a name="accessor-functions" id="accessor-functions">Accessor Functions</a>
+        </h2>
+        <p>
+            Between <code><b>MAKE-INSTANCE</b></code> and <code><b>SLOT-VALUE</b></code>, you have all the tools you need for creating and manipulating instances of your classes. Everything else you might want to do can be implemented in terms of those two functions. However, as anyone familiar with the principles of good object-oriented programming practices knows, directly accessing the slots (or fields or member variables) of an object can lead to fragile code. The problem is that directly accessing slots ties your code too tightly to the concrete structure of your class. For example, suppose you decide to change the definition of <code>bank-account</code> so that, instead of storing the current balance as a number, you store a list of time-stamped withdrawals and deposits. Code that directly accesses the <code>balance</code> slot will likely break if you change the class definition to remove the slot or to store the new list in the old slot. On the other hand, if you define a function, <code>balance</code>, that accesses the slot, you can redefine it later to preserve its behavior even if the internal representation changes. And code that uses such a function will continue to work without modification.
+        </p>
+        <p>
+            Another advantage to using accessor functions rather than direct access to slots via <code><b>SLOT-VALUE</b></code> is that they let you limit the ways outside code can modify a slot.<sup>8</sup> It may be fine for users of the <code>bank-account</code> class to get the current balance, but you may want all modifications to the balance to go through other functions you'll provide, such as <code>deposit</code> and <code>withdraw</code>. If clients know they're supposed to manipulate objects only through the published functional API, you can provide a <code>balance</code> function but not make it <code><b>SETF</b></code>able if you want the balance to be read-only.
+        </p>
+        <p>
+            Finally, using accessor functions makes your code tidier since it helps you avoid lots of uses of the rather verbose <code><b>SLOT-VALUE</b></code> function.
+        </p>
+        <p>
+            It's trivial to define a function that reads the value of the <code>balance</code> slot.
+        </p>
+        <pre>
+(defun balance (account)
+  (slot-value account 'balance))
+</pre>
+        <p>
+            However, if you know you're going to define subclasses of <code>bank-account</code>, it might be a good idea to define <code>balance</code> as a generic function. That way, you can provide different methods on <code>balance</code> for those subclasses or extend its definition with auxiliary methods. So you might write this instead:
+        </p>
+        <pre>
+(defgeneric balance (account))
+
+(defmethod balance ((account bank-account))
+  (slot-value account 'balance))
+</pre>
+        <p>
+            As I just discussed, you don't want callers to be able to directly set the balance, but for other slots, such as <code>customer-name</code>, you may also want to provide a function to set them. The cleanest way to define such a function is as a <code><b>SETF</b></code> function.
+        </p>
+        <p>
+            A <code><b>SETF</b></code> function is a way to extend <code><b>SETF</b></code>, defining a new kind of place that it knows how to set. The name of a <code><b>SETF</b></code> function is a two-item list whose first element is the symbol <code>setf</code> and whose second element is a symbol, typically the name of a function used to access the place the <code><b>SETF</b></code> function will set. A <code><b>SETF</b></code> function can take any number of arguments, but the first argument is always the value to be assigned to the place.<sup>9</sup> You could, for instance, define a <code><b>SETF</b></code> function to set the <code>customer-name</code> slot in a <code>bank-account</code> like this:
+        </p>
+        <pre>
+(defun (setf customer-name) (name account)
+  (setf (slot-value account 'customer-name) name))
+</pre>
+        <p>
+            After evaluating that definition, an expression like the following one:
+        </p>
+        <pre>
+(setf (customer-name my-account) "Sally Sue")
+</pre>
+        <p>
+            will be compiled as a call to the <code><b>SETF</b></code> function you just defined with "Sally Sue" as the first argument and the value of <code>my-account</code> as the second argument.
+        </p>
+        <p>
+            Of course, as with reader functions, you'll probably want your <code><b>SETF</b></code> function to be generic, so you'd actually define it like this:
+        </p>
+        <pre>
+(defgeneric (setf customer-name) (value account))
+
+(defmethod (setf customer-name) (value (account bank-account))
+  (setf (slot-value account 'customer-name) value))
+</pre>
+        <p>
+            And of course you'll also want to define a reader function for <code>customer-name</code>.
+        </p>
+        <pre>
+(defgeneric customer-name (account))
+
+(defmethod customer-name ((account bank-account))
+  (slot-value account 'customer-name))
+</pre>
+        <p>
+            This allows you to write the following:
+        </p>
+        <pre>
+(setf (customer-name *account*) "Sally Sue") ==&gt; "Sally Sue"
+
+(customer-name *account*)                    ==&gt; "Sally Sue"
+</pre>
+        <p>
+            There's nothing hard about writing these accessor functions, but it wouldn't be in keeping with The Lisp Way to have to write them all by hand. Thus, <code><b>DEFCLASS</b></code> supports three slot options that allow you to automatically create reader and writer functions for a specific slot.
+        </p>
+        <p>
+            The <code>:reader</code> option specifies a name to be used as the name of a generic function that accepts an object as its single argument. When the <code><b>DEFCLASS</b></code> is evaluated, the generic function is created, if it doesn't already exist. Then a method specializing its single argument on the new class and returning the value of the slot is added to the generic function. The name can be anything, but it's typical to name it the same as the slot itself. Thus, instead of explicitly writing the <code>balance</code> generic function and method as shown previously, you could change the slot specifier for the <code>balance</code> slot in the definition of <code>bank-account</code> to this:
+        </p>
+        <pre>
+(balance
+ :initarg :balance
+ :initform 0
+ :reader balance)
+</pre>
+        <p>
+            The <code>:writer</code> option is used to create a generic function and method for setting the value of a slot. The function and method created follow the requirements for a <code><b>SETF</b></code> function, taking the new value as the first argument and returning it as the result, so you can define a <code><b>SETF</b></code> function by providing a name such as <code>(setf customer-name)</code>. For instance, you could provide reader and writer methods for <code>customer-name</code> equivalent to the ones you just wrote by changing the slot specifier to this:
+        </p>
+        <pre>
+(customer-name
+ :initarg :customer-name
+ :initform (error "Must supply a customer name.")
+ :reader customer-name
+ :writer (setf customer-name))
+</pre>
+        <p>
+            Since it's quite common to want both reader and writer functions, <code><b>DEFCLASS</b></code> also provides an option, <code>:accessor</code>, that creates both a reader function and the corresponding <code><b>SETF</b></code> function. So instead of the slot specifier just shown, you'd typically write this:
+        </p>
+        <pre>
+(customer-name
+ :initarg :customer-name
+ :initform (error "Must supply a customer name.")
+ :accessor customer-name)
+</pre>
+        <p>
+            Finally, one last slot option you should know about is the <code>:documentation</code> option, which you can use to provide a string that documents the purpose of the slot. Putting it all together and adding a reader method for the <code>account-number</code> and <code>account-type</code> slots, the <code><b>DEFCLASS</b></code> form for the <code>bank-account</code> class would look like this:
+        </p>
+        <pre>
+(defclass bank-account ()
+  ((customer-name
+    :initarg :customer-name
+    :initform (error "Must supply a customer name.")
+    :accessor customer-name
+    :documentation "Customer's name")
+   (balance
+    :initarg :balance
+    :initform 0
+    :reader balance
+    :documentation "Current account balance")
+   (account-number
+    :initform (incf *account-numbers*)
+    :reader account-number
+    :documentation "Account number, unique within a bank.")
+   (account-type
+    :reader account-type
+    :documentation "Type of account, one of :gold, :silver, or :bronze.")))
+</pre>
+        <h2>
+            <a name="with-slots-and-with-accessors" id="with-slots-and-with-accessors">WITH-SLOTS and WITH-ACCESSORS</a>
+        </h2>
+        <p>
+            While using accessor functions will make your code easier to maintain, they can still be a bit verbose. And there will be times, when writing methods that implement the low-level behaviors of a class, that you may specifically want to access slots directly to set a slot that has no writer function or to get at the slot value without causing any auxiliary methods defined on the reader function to run.
+        </p>
+        <p>
+            This is what <code><b>SLOT-VALUE</b></code> is for; however, it's still quite verbose. To make matters worse, a function or method that accesses the same slot several times can become clogged with calls to accessor functions and <code><b>SLOT-VALUE</b></code>. For example, even a fairly simple method such as the following, which assesses a penalty on a <code>bank-account</code> if its balance falls below a certain minimum, is cluttered with calls to <code>balance</code> and <code><b>SLOT-VALUE</b></code>:
+        </p>
+        <pre>
+(defmethod assess-low-balance-penalty ((account bank-account))
+  (when (&lt; (balance account) *minimum-balance*)
+    (decf (slot-value account 'balance) (* (balance account) .01))))
+</pre>
+        <p>
+            And if you decide you want to directly access the slot value in order to avoid running auxiliary methods, it gets even more cluttered.
+        </p>
+        <pre>
+(defmethod assess-low-balance-penalty ((account bank-account))
+  (when (&lt; (slot-value account 'balance) *minimum-balance*)
+    (decf (slot-value account 'balance) (* (slot-value account 'balance) .01))))
+</pre>
+        <p>
+            Two standard macros, <code><b>WITH-SLOTS</b></code> and <code><b>WITH-ACCESSORS</b></code>, can help tidy up this clutter. Both macros create a block of code in which simple variable names can be used to refer to slots on a particular object. <code><b>WITH-SLOTS</b></code> provides direct access to the slots, as if by <code><b>SLOT-VALUE</b></code>, while <code><b>WITH-ACCESSORS</b></code> provides a shorthand for accessor methods.
+        </p>
+        <p>
+            The basic form of <code><b>WITH-SLOTS</b></code> is as follows:
+        </p>
+        <pre>
+(with-slots (<i>slot</i>*) <i>instance-form</i>
+  <i>body-form</i>*)
+</pre>
+        <p>
+            Each element of <i>slots</i> can be either the name of a slot, which is also used as a variable name, or a two-item list where the first item is a name to use as a variable and the second is the name of the slot. The <i>instance-form</i> is evaluated once to produce the object whose slots will be accessed. Within the body, each occurrence of one of the variable names is translated to a call to <code><b>SLOT-VALUE</b></code> with the object and the appropriate slot name as arguments.<sup>10</sup> Thus, you can write <code>assess-low-balance-penalty</code> like this:
+        </p>
+        <pre>
+(defmethod assess-low-balance-penalty ((account bank-account))
+  (with-slots (balance) account
+    (when (&lt; balance *minimum-balance*)
+      (decf balance (* balance .01)))))
+</pre>
+        <p>
+            or, using the two-item list form, like this:
+        </p>
+        <pre>
+(defmethod assess-low-balance-penalty ((account bank-account))
+  (with-slots ((bal balance)) account
+    (when (&lt; bal *minimum-balance*)
+      (decf bal (* bal .01)))))
+</pre>
+        <p>
+            If you had defined <code>balance</code> with an <code>:accessor</code> rather than just a <code>:reader</code>, then you could also use <code><b>WITH-ACCESSORS</b></code>. The form of <code><b>WITH-ACCESSORS</b></code> is the same as <code><b>WITH-SLOTS</b></code> except each element of the slot list is a two-item list containing a variable name and the name of an accessor function. Within the body of <code><b>WITH-ACCESSORS</b></code>, a reference to one of the variables is equivalent to a call to the corresponding accessor function. If the accessor function is <code><b>SETF</b></code>able, then so is the variable.
+        </p>
+        <pre>
+(defmethod assess-low-balance-penalty ((account bank-account))
+  (with-accessors ((balance balance)) account
+    (when (&lt; balance *minimum-balance*)
+      (decf balance (* balance .01)))))
+</pre>
+        <p>
+            The first <code>balance</code> is the name of the variable, and the second is the name of the accessor function; they don't have to be the same. You could, for instance, write a method to merge two accounts using two calls to <code><b>WITH-ACCESSORS</b></code>, one for each account.
+        </p>
+        <pre>
+(defmethod merge-accounts ((account1 bank-account) (account2 bank-account))
+  (with-accessors ((balance1 balance)) account1
+    (with-accessors ((balance2 balance)) account2
+      (incf balance1 balance2)
+      (setf balance2 0))))
+</pre>
+        <p>
+            The choice of whether to use <code><b>WITH-SLOTS</b></code> versus <code><b>WITH-ACCESSORS</b></code> is the same as the choice between <code><b>SLOT-VALUE</b></code> and an accessor function: low-level code that provides the basic functionality of a class may use <code><b>SLOT-VALUE</b></code> or <code><b>WITH-SLOTS</b></code> to directly manipulate slots in ways not supported by accessor functions or to explicitly avoid the effects of auxiliary methods that may have been defined on the accessor functions. But you should generally use accessor functions or <code><b>WITH-ACCESSORS</b></code> unless you have a specific reason not to.
+        </p>
+        <h2>
+            <a name="class-allocated-slots" id="class-allocated-slots">Class-Allocated Slots</a>
+        </h2>
+        <p>
+            The last slot option you need to know about is <code>:allocation</code>. The value of <code>:allocation</code> can be either <code>:instance</code> or <code>:class</code> and defaults to <code>:instance</code> if not specified. When a slot has <code>:class</code> allocation, the slot has only a single value, which is stored in the class and shared by all instances.
+        </p>
+        <p>
+            However, <code>:class</code> slots are accessed the same as <code>:instance</code> slots--they're accessed with <code><b>SLOT-VALUE</b></code> or an accessor function, which means you can access the slot value only through an instance of the class even though it isn't actually stored in the instance. The <code>:initform</code> and <code>:initarg</code> options have essentially the same effect except the initform is evaluated once when the class is defined rather than each time an instance is created. On the other hand, passing an initarg to <code><b>MAKE-INSTANCE</b></code> will set the value, affecting all instances of the class.
+        </p>
+        <p>
+            Because you can't get at a class-allocated slot without an instance of the class, class-allocated slots aren't really equivalent to <i>static</i> or <i>class</i> fields in languages such as Java, C++, and Python.<sup>11</sup> Rather, class-allocated slots are used primarily to save space; if you're going to create many instances of a class and all instances are going to have a reference to the same object--say, a pool of shared resources--you can save the cost of each instance having its own reference by making the slot class-allocated.
+        </p>
+        <h2>
+            <a name="slots-and-inheritance" id="slots-and-inheritance">Slots and Inheritance</a>
+        </h2>
+        <p>
+            As I discussed in the previous chapter, classes inherit behavior from their superclasses thanks to the generic function machinery--a method specialized on class <code>A</code> is applicable not only to direct instances of <code>A</code> but also to instances of <code>A</code>'s subclasses. Classes also inherit slots from their superclasses, but the mechanism is slightly different.
+        </p>
+        <p>
+            In Common Lisp a given object can have only one slot with a particular name. However, it's possible that more than one class in the inheritance hierarchy of a given class will specify a slot with a particular name. This can happen either because a subclass includes a slot specifier with the same name as a slot specified in a superclass or because multiple superclasses specify slots with the same name.
+        </p>
+        <p>
+            Common Lisp resolves these situations by merging all the specifiers with the same name from the new class and all its superclasses to create a single specifier for each unique slot name. When merging specifiers, different slot options are treated differently. For instance, since a slot can have only a single default value, if multiple classes specify an <code>:initform</code>, the new class uses the one from the most specific class. This allows a subclass to specify a different default value than the one it would otherwise inherit.
+        </p>
+        <p>
+            On the other hand, <code>:initarg</code>s needn't be exclusive--each <code>:initarg</code> option in a slot specifier creates a keyword parameter that can be used to initialize the slot; multiple parameters don't create a conflict, so the new slot specifier contains all the <code>:initarg</code>s. Callers of <code><b>MAKE-INSTANCE</b></code> can use any of the <code>:initarg</code>s to initialize the slot. If a caller passes multiple keyword arguments that initialize the same slot, then the leftmost argument in the call to <code><b>MAKE-INSTANCE</b></code> is used.
+        </p>
+        <p>
+            Inherited <code>:reader</code>, <code>:writer</code>, and <code>:accessor</code> options aren't included in the merged slot specifier since the methods created by the superclass's <code><b>DEFCLASS</b></code> will already apply to the new class. The new class can, however, create its own accessor functions by supplying its own <code>:reader</code>, <code>:writer</code>, or <code>:accessor</code> options.
+        </p>
+        <p>
+            Finally, the <code>:allocation</code> option is, like <code>:initform</code>, determined by the most specific class that specifies the slot. Thus, it's possible for all instances of one class to share a <code>:class</code> slot while instances of a subclass may each have their own <code>:instance</code> slot of the same name. And a sub-subclass may then redefine it back to <code>:class</code> slot, so all instances of <i>that</i> class will again share a single slot. In the latter case, the slot shared by instances of the sub-subclass is different than the slot shared by the original superclass.
+        </p>
+        <p>
+            For instance, suppose you have these classes:
+        </p>
+        <pre>
+(defclass foo ()
+  ((a :initarg :a :initform "A" :accessor a)
+   (b :initarg :b :initform "B" :accessor b)))
+
+(defclass bar (foo)
+  ((a :initform (error "Must supply a value for a"))
+   (b :initarg :the-b :accessor the-b :allocation :class)))
+</pre>
+        <p>
+            When instantiating the class <code>bar</code>, you can use the inherited initarg, <code>:a</code>, to specify a value for the slot <code>a</code> and, in fact, must do so to avoid an error, since the <code>:initform</code> supplied by <code>bar</code> supersedes the one inherited from <code>foo</code>. To initialize the <code>b</code> slot, you can use either the inherited initarg :<code>b</code> or the new initarg <code>:the-b</code>. However, because of the <code>:allocation</code> option on the <code>b</code> slot in <code>bar</code>, the value specified will be stored in the slot shared by all instances of <code>bar</code>. That same slot can be accessed either with the method on the generic function <code>b</code> that specializes on <code>foo</code> or with the new method on the generic function <code>the-b</code> that specializes directly on <code>bar</code>. To access the <code>a</code> slot on either a <code>foo</code> or a <code>bar</code>, you'll continue to use the generic function <code>a</code>.
+        </p>
+        <p>
+            Usually merging slot definitions works quite nicely. However, it's important to be aware when using multiple inheritance that two unrelated slots that happen to have the same name can be merged into a single slot in the new class. Thus, methods specialized on different classes could end up manipulating the same slot when applied to a class that extends those classes. This isn't much of a problem in practice since, as you'll see in Chapter 21, you can use the package system to avoid collisions between names in independently developed pieces of code.
+        </p>
+        <h2>
+            <a name="multiple-inheritance" id="multiple-inheritance">Multiple Inheritance</a>
+        </h2>
+        <p>
+            All the classes you've seen so far have had only a single direct superclass. Common Lisp also supports multiple inheritance--a class can have multiple direct superclasses, inheriting applicable methods and slot specifiers from all of them.
+        </p>
+        <p>
+            Multiple inheritance doesn't dramatically change any of the mechanisms of inheritance I've discussed so far--every user-defined class already has multiple superclasses since they all extend <code><b>STANDARD-OBJECT</b></code>, which extends <code><b>T</b></code>, and so have at least two superclasses. The wrinkle that multiple inheritance adds is that a class can have more than one <i>direct</i> superclass. This complicates the notion of class specificity that's used both when building the effective methods for a generic function and when merging inherited slot specifiers.
+        </p>
+        <p>
+            That is, if classes could have only a single direct superclass, ordering classes by specificity would be trivial--a class and all its superclasses could be ordered in a straight line starting from the class itself, followed by its single direct superclass, followed by <i>its</i> direct superclass, all the way up to <code><b>T</b></code>. But when a class has multiple direct superclasses, those superclasses are typically not related to each other--indeed, if one was a subclass of another, you wouldn't need to subclass both directly. In that case, the rule that subclasses are more specific than their superclasses isn't enough to order all the superclasses. So Common Lisp uses a second rule that sorts unrelated superclasses according to the order they're listed in the <code><b>DEFCLASS</b></code>'s direct superclass list--classes earlier in the list are considered more specific than classes later in the list. This rule is admittedly somewhat arbitrary but does allow every class to have a linear <i>class precedence list</i>, which can be used to determine which superclasses should be considered more specific than others. Note, however, there's no global ordering of classes--each class has its own class precedence list, and the same classes can appear in different orders in different classes' class precedence lists.
+        </p>
+        <p>
+            To see how this works, let's add a class to the banking app: <code>money-market-account</code>. A money market account combines the characteristics of a checking account and a savings account: a customer can write checks against it, but it also earns interest. You might define it like this:
+        </p>
+        <pre>
+(defclass money-market-account (checking-account savings-account) ())
+</pre>
+        <p>
+            The class precedence list for <code>money-market-account</code> will be as follows:
+        </p>
+        <pre>
+(money-market-account
+ checking-account
+ savings-account
+ bank-account
+ standard-object
+ t)
+</pre>
+        <p>
+            Note how this list satisfies both rules: every class appears before all its superclasses, and <code>checking-account</code> and <code>savings-account</code> appear in the order specified in <code><b>DEFCLASS</b></code>.
+        </p>
+        <p>
+            This class defines no slots of its own but will inherit slots from both of its direct superclasses, including the slots they inherit from their superclasses. Likewise, any method that's applicable to any class in the class precedence list will be applicable to a <code>money-market-account</code> object. Because all slot specifiers for the same slot are merged, it doesn't matter that <code>money-market-account</code> inherits the same slot specifiers from <code>bank-account</code> twice. <sup>12</sup>
+        </p>
+        <p>
+            Multiple inheritance is easiest to understand when the different superclasses provide completely independent slots and behaviors. For instance, <code>money-market-account</code> will inherit slots and behaviors for dealing with checks from <code>checking-account</code> and slots and behaviors for computing interest from <code>savings-account</code>. You don't have to worry about the class precedence list for methods and slots inherited from only one superclass or another.
+        </p>
+        <p>
+            However, it's also possible to inherit different methods for the same generic function from different superclasses. In that case, the class precedence list does come into play. For instance, suppose the banking application defined a generic function <code>print-statement</code> used to generate monthly statements. Presumably there would already be methods for <code>print-statement</code> specialized on both <code>checking-account</code> and <code>savings-account</code>. Both of these methods will be applicable to instances of <code>money-market-account</code>, but the one specialized on <code>checking-account</code> will be considered more specific than the one on <code>savings-account</code> because <code>checking-account</code> precedes <code>savings-account</code> in <code>money-market-account</code>'s class precedence list.
+        </p>
+        <p>
+            Assuming the inherited methods are all primary methods and you haven't defined any other methods, the method specialized on <code>checking-account</code> will be used if you invoke <code>print-statement</code> on <code>money-market-account</code>. However, that won't necessarily give you the behavior you want since you probably want a money market account's statement to contain elements of both a checking account and a savings account statement.
+        </p>
+        <p>
+            You can modify the behavior of <code>print-statement</code> for <code>money-market-account</code>s in a couple ways. One straightforward way is to define a new primary method specialized on <code>money-market-account</code>. This gives you the most control over the new behavior but will probably require more new code than some other options I'll discuss in a moment. The problem is that while you can use <code><b>CALL-NEXT-METHOD</b></code> to call "up" to the next most specific method, namely, the one specialized on <code>checking-account</code>, there's no way to invoke a particular less-specific method, such as the one specialized on <code>savings-account</code>. Thus, if you want to be able to reuse the code that prints the <code>savings-account</code> part of the statement, you'll need to break that code into a separate function, which you can then call directly from both the <code>money-market-account</code> and <code>savings-account</code> <code>print-statement</code> methods.
+        </p>
+        <p>
+            Another possibility is to write the primary methods of all three classes to call <code><b>CALL-NEXT-METHOD</b></code>. Then the method specialized on <code>money-market-account</code> will use <code><b>CALL-NEXT-METHOD</b></code> to invoke the method specialized on <code>checking-account</code>. When that method calls <code><b>CALL-NEXT-METHOD</b></code>, it will result in running the <code>savings-account</code> method since it will be the next most specific method according to <code>money-market-account</code>'s class precedence list.
+        </p>
+        <p>
+            Of course, if you're going to rely on a coding convention--that every method calls <code><b>CALL-NEXT-METHOD</b></code>--to ensure all the applicable methods run at some point, you should think about using auxiliary methods instead. In this case, instead of defining primary methods on <code>print-statement</code> for <code>checking-account</code> and <code>savings-account</code>, you can define those methods as <code>:after</code> methods, defining a single primary method on <code>bank-account</code>. Then, <code>print-statement</code>, called on a <code>money-market-account</code>, will print a basic account statement, output by the primary method specialized on <code>bank-account</code>, followed by details output by the <code>:after</code> methods specialized on <code>savings-account</code> and <code>checking-account</code>. And if you want to add details specific to <code>money-market-account</code>s, you can define an <code>:after</code> method specialized on <code>money-market-account</code>, which will run last of all.
+        </p>
+        <p>
+            The advantage of using auxiliary methods is that it makes it quite clear which methods are primarily responsible for implementing the generic function and which ones are only contributing additional bits of functionality. The disadvantage is that you don't get fine-grained control over the order in which the auxiliary methods run--if you wanted the <code>checking-account</code> part of the statement to print before the <code>savings-account</code> part, you'd have to change the order in which the <code>money-market-account</code> subclasses those classes. But that's a fairly dramatic change that could affect other methods and inherited slots. In general, if you find yourself twiddling the order of the direct superclass list as a way of fine-tuning the behavior of specific methods, you probably need to step back and rethink your approach.
+        </p>
+        <p>
+            On the other hand, if you don't care exactly what the order is but want it to be consistent across several generic functions, then using auxiliary methods may be just the thing. For example, if in addition to <code>print-statement</code> you have a <code>print-detailed-statement</code> generic function, you can implement both functions using <code>:after</code> methods on the various subclasses of <code>bank-account</code>, and the order of the parts of both a regular and a detailed statement will be the same.
+        </p>
+        <h2>
+            <a name="good-object-oriented-design" id="good-object-oriented-design">Good Object-Oriented Design</a>
+        </h2>
+        <p>
+            That's about it for the main features of Common Lisp's object system. If you have lots of experience with object-oriented programming, you can probably see how Common Lisp's features can be used to implement good object-oriented designs. However, if you have less experience with object orientation, you may need to spend some time absorbing the object-oriented way of thinking. Unfortunately, that's a fairly large topic and beyond the scope of this book. Or, as the man page for Perl's object system puts it, "Now you need just to go off and buy a book about object-oriented design methodology and bang your forehead with it for the next six months or so." Or you can wait for some of the practical chapters, later in this book, where you'll see several examples of how these features are used in practice. For now, however, you're ready to take a break from all this theory of object orientation and turn to the rather different topic of how to make good use of Common Lisp's powerful, but sometimes cryptic, <code><b>FORMAT</b></code> function.
+        </p>
+        <hr>
+        <div class="notes">
+            <p>
+                <sup>1</sup>Defining new methods for an existing class may seem strange to folks used to statically typed languages such as C++ and Java in which all the methods of a class must be defined as part of the class definition. But programmers with experience in dynamically typed object-oriented languages such as Smalltalk and Objective C will find nothing strange about adding new behaviors to existing classes.
+            </p>
+            <p>
+                <sup>2</sup>In other object-oriented languages, slots might be called <i>fields</i>, <i>member variables</i>, or <i>attributes</i>.
+            </p>
+            <p>
+                <sup>3</sup>As when naming functions and variables, it's not quite true that you can use <i>any</i> symbol as a class name--you can't use names defined by the language standard. You'll see in Chapter 21 how to avoid such name conflicts.
+            </p>
+            <p>
+                <sup>4</sup>The argument to <code><b>MAKE-INSTANCE</b></code> can actually be either the name of the class or a class object returned by the function <code><b>CLASS-OF</b></code> or <code><b>FIND-CLASS</b></code>.
+            </p>
+            <p>
+                <sup>5</sup>Another way to affect the values of slots is with the <code>:default-initargs</code> option to <code><b>DEFCLASS</b></code>. This option is used to specify forms that will be evaluated to provide arguments for specific initialization parameters that aren't given a value in a particular call to <code><b>MAKE-INSTANCE</b></code>. You don't need to worry about <code>:default-initargs</code> for now.
+            </p>
+            <p>
+                <sup>6</sup>Adding an <code>:after</code> method to <code><b>INITIALIZE-INSTANCE</b></code> is the Common Lisp analog to defining a constructor in Java or C++ or an <code>__init__</code> method in Python.
+            </p>
+            <p>
+                <sup>7</sup>One mistake you might make until you get used to using auxiliary methods is to define a method on <code><b>INITIALIZE-INSTANCE</b></code> but without the <code>:after</code> qualifier. If you do that, you'll get a new primary method that shadows the default one. You can remove the unwanted primary method using the functions <code><b>REMOVE-METHOD</b></code> and <code><b>FIND-METHOD</b></code>. Certain development environments may provide a graphical user interface to do the same thing.
+            </p>
+            <pre>
+(remove-method #'initialize-instance
+  (find-method #'initialize-instance () (list (find-class 'bank-account))))
+</pre>
+            <p>
+                <sup>8</sup>Of course, providing an accessor function doesn't really limit anything since other code can still use <code><b>SLOT-VALUE</b></code> to get at slots directly. Common Lisp doesn't provide strict encapsulation of slots the way some languages such as C++ and Java do; however, if the author of a class provides accessor functions and you ignore them, using <code><b>SLOT-VALUE</b></code> instead, you had better know what you're doing. It's also possible to use the package system, which I'll discuss in Chapter 21, to make it even more obvious that certain slots aren't to be accessed directly, by not exporting the names of the slots.
+            </p>
+            <p>
+                <sup>9</sup>One consequence of defining a <code><b>SETF</b></code> function--say, <code>(setf foo)</code>--is that if you also define the corresponding accessor function, <code>foo</code> in this case, you can use all the modify macros built upon <code><b>SETF</b></code>, such as <code><b>INCF</b></code>, <code><b>DECF</b></code>, <code><b>PUSH</b></code>, and <code><b>POP</b></code>, on the new kind of place.
+            </p>
+            <p>
+                <sup>10</sup>The "variable" names provided by <code><b>WITH-SLOTS</b></code> and <code><b>WITH-ACCESSORS</b></code> aren't true variables; they're implemented using a special kind of macro, called a <i>symbol macro</i>, that allows a simple name to expand into arbitrary code. Symbol macros were introduced into the language to support <code><b>WITH-SLOTS</b></code> and <code><b>WITH-ACCESSORS</b></code>, but you can also use them for your own purposes. I'll discuss them in a bit more detail in Chapter 20.
+            </p>
+            <p>
+                <sup>11</sup>The Meta Object Protocol (MOP), which isn't part of the language standard but is supported by most Common Lisp implementations, provides a function, <code>class-prototype</code>, that returns an instance of a class that can be used to access class slots. If you're using an implementation that supports the MOP and happen to be translating some code from another language that makes heavy use of static or class fields, this may give you a way to ease the translation. But it's not all that idiomatic.
+            </p>
+            <p>
+                <sup>12</sup>In other words, Common Lisp doesn't suffer from the <i>diamond inheritance</i> problem the way, say, C++ does. In C++, when one class subclasses two classes that both inherit a member variable from a common superclass, the bottom class inherits the member variable twice, leading to no end of confusion.
+            </p>
+        </div>
+        <div class="copyright">
+            Copyright © 2003-2005, Peter Seibel
+        </div>
+    </body>
+</html>

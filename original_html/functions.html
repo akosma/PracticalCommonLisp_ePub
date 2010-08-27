@@ -1,0 +1,498 @@
+<HTML><HEAD><TITLE>Functions</TITLE><LINK REL="stylesheet" TYPE="text/css" HREF="style.css"/></HEAD><BODY><DIV CLASS="copyright">Copyright &copy; 2003-2005, Peter Seibel</DIV><H1>5. Functions</H1><P>After the rules of syntax and semantics, the three most basic
+components of all Lisp programs are functions, variables and macros.
+You used all three while building the database in Chapter 3, but I
+glossed over a lot of the details of how they work and how to best
+use them. I'll devote the next few chapters to these three topics,
+starting with functions, which--like their counterparts in other
+languages--provide the basic mechanism for abstracting, well,
+functionality.</P><P>The bulk of Lisp itself consists of functions. More than three
+quarters of the names defined in the language standard name
+functions. All the built-in data types are defined purely in terms of
+what functions operate on them. Even Lisp's powerful object system is
+built upon a conceptual extension to functions, generic functions,
+which I'll cover in Chapter 16.</P><P>And, despite the importance of macros to The Lisp Way, in the end all
+real functionality is provided by functions. Macros run at compile
+time, so the code they generate--the code that will actually make up
+the program after all the macros are expanded--will consist entirely
+of calls to functions and special operators. Not to mention, macros
+themselves are also functions, albeit functions that are used to
+generate code rather than to perform the actions of the
+program.<SUP>1</SUP></P><A NAME="defining-new-functions"><H2>Defining New Functions</H2></A><P>Normally functions are defined using the <CODE><B>DEFUN</B></CODE> macro. The basic
+skeleton of a <CODE><B>DEFUN</B></CODE> looks like this:</P><PRE>(defun <I>name</I> (<I>parameter</I>*)
+  &quot;Optional documentation string.&quot;
+  <I>body-form</I>*)</PRE><P>Any symbol can be used as a function name.<SUP>2</SUP> Usually function names contain only
+alphabetic characters and hyphens, but other characters are allowed
+and are used in certain naming conventions. For instance, functions
+that convert one kind of value to another sometimes use <CODE>-&gt;</CODE> in
+the name. For example, a function to convert strings to widgets might
+be called <CODE>string-&gt;widget</CODE>. The most important naming convention
+is the one mentioned in Chapter 2, which is that you construct
+compound names with hyphens rather than underscores or inner caps.
+Thus, <CODE>frob-widget</CODE> is better Lisp style than either
+<CODE>frob_widget</CODE> or <CODE>frobWidget</CODE>.</P><P>A function's parameter list defines the variables that will be used
+to hold the arguments passed to the function when it's
+called.<SUP>3</SUP> If the function takes no
+arguments, the list is empty, written as <CODE>()</CODE>. Different flavors
+of parameters handle required, optional, multiple, and keyword
+arguments. I'll discuss the details in the next section.</P><P>If a string literal follows the parameter list, it's a documentation
+string that should describe the purpose of the function. When the
+function is defined, the documentation string will be associated with
+the name of the function and can later be obtained using the
+<CODE><B>DOCUMENTATION</B></CODE> function.<SUP>4</SUP></P><P>Finally, the body of a <CODE><B>DEFUN</B></CODE> consists of any number of Lisp
+expressions. They will be evaluated in order when the function is
+called and the value of the last expression is returned as the value
+of the function. Or the <CODE><B>RETURN-FROM</B></CODE> special operator can be used
+to return immediately from anywhere in a function, as I'll discuss in
+a moment.</P><P>In Chapter 2 we wrote a <CODE>hello-world</CODE> function, which looked
+like this:</P><PRE>(defun hello-world () (format t &quot;hello, world&quot;))</PRE><P>You can now analyze the parts of this function. Its name is
+<CODE>hello-world</CODE>, its parameter list is empty so it takes no
+arguments, it has no documentation string, and its body consists of
+one expression. </P><PRE>(format t &quot;hello, world&quot;)</PRE><P>The following is a slightly more complex function:</P><PRE>(defun verbose-sum (x y)
+  &quot;Sum any two numbers after printing a message.&quot;
+  (format t &quot;Summing ~d and ~d.~%&quot; x y)
+  (+ x y))</PRE><P>This function is named <CODE>verbose-sum</CODE>, takes two arguments that
+will be bound to the parameters <CODE>x</CODE> and <CODE>y</CODE>, has a
+documentation string, and has a body consisting of two expressions.
+The value returned by the call to <CODE><B>+</B></CODE> becomes the return value of
+<CODE>verbose-sum</CODE>. </P><A NAME="function-parameter-lists"><H2>Function Parameter Lists</H2></A><P>There's not a lot more to say about function names or documentation
+strings, and it will take a good portion of the rest of this book to
+describe all the things you can do in the body of a function, which
+leaves us with the parameter list.</P><P>The basic purpose of a parameter list is, of course, to declare the
+variables that will receive the arguments passed to the function.
+When a parameter list is a simple list of variable names--as in
+<CODE>verbose-sum</CODE>--the parameters are called <I>required
+parameters</I>. When a function is called, it must be supplied with one
+argument for every required parameter. Each parameter is bound to the
+corresponding argument. If a function is called with too few or too
+many arguments, Lisp will signal an error.</P><P>However, Common Lisp's parameter lists also give you more flexible
+ways of mapping the arguments in a function call to the function's
+parameters. In addition to required parameters, a function can have
+optional parameters. Or a function can have a single parameter that's
+bound to a list containing any extra arguments. And, finally,
+arguments can be mapped to parameters using keywords rather than
+position. Thus, Common Lisp's parameter lists provide a convenient
+solution to several common coding problems. </P><A NAME="optional-parameters"><H2>Optional Parameters</H2></A><P>While many functions, like <CODE>verbose-sum</CODE>, need only required
+parameters, not all functions are quite so simple. Sometimes a
+function will have a parameter that only certain callers will care
+about, perhaps because there's a reasonable default value. An example
+is a function that creates a data structure that can grow as needed.
+Since the data structure can grow, it doesn't matter--from a
+correctness point of view--what the initial size is. But callers who
+have a good idea how many items they're going to put into the data
+structure may be able to improve performance by specifying a specific
+initial size. Most callers, though, would probably rather let the
+code that implements the data structure pick a good general-purpose
+value. In Common Lisp you can accommodate both kinds of callers by
+using an optional parameter; callers who don't care will get a
+reasonable default, and other callers can provide a specific
+value.<SUP>5</SUP></P><P>To define a function with optional parameters, after the names of any
+required parameters, place the symbol <CODE><B>&amp;optional</B></CODE> followed by the
+names of the optional parameters. A simple example looks like this:</P><PRE>(defun foo (a b &amp;optional c d) (list a b c d))</PRE><P>When the function is called, arguments are first bound to the
+required parameters. After all the required parameters have been
+given values, if there are any arguments left, their values are
+assigned to the optional parameters. If the arguments run out before
+the optional parameters do, the remaining optional parameters are
+bound to the value <CODE><B>NIL</B></CODE>. Thus, the function defined previously
+gives the following results: </P><PRE>(foo 1 2)     ==&gt; (1 2 NIL NIL)
+(foo 1 2 3)   ==&gt; (1 2 3 NIL)
+(foo 1 2 3 4) ==&gt; (1 2 3 4)</PRE><P>Lisp will still check that an appropriate number of arguments are
+passed to the function--in this case between two and four,
+inclusive--and will signal an error if the function is called with
+too few or too many.</P><P>Of course, you'll often want a different default value than <CODE><B>NIL</B></CODE>.
+You can specify the default value by replacing the parameter name
+with a list containing a name and an expression. The expression will
+be evaluated only if the caller doesn't pass enough arguments to
+provide a value for the optional parameter. The common case is simply
+to provide a value as the expression.</P><PRE>(defun foo (a &amp;optional (b 10)) (list a b))</PRE><P>This function requires one argument that will be bound to the
+parameter <CODE>a</CODE>. The second parameter, <CODE>b</CODE>, will take either
+the value of the second argument, if there is one, or 10.</P><PRE>(foo 1 2) ==&gt; (1 2)
+(foo 1)   ==&gt; (1 10)</PRE><P>Sometimes, however, you may need more flexibility in choosing the
+default value. You may want to compute a default value based on other
+parameters. And you can--the default-value expression can refer to
+parameters that occur earlier in the parameter list. If you were
+writing a function that returned some sort of representation of a
+rectangle and you wanted to make it especially convenient to make
+squares, you might use an argument list like this: </P><PRE>(defun make-rectangle (width &amp;optional (height width)) ...)</PRE><P>which would cause the <CODE>height</CODE> parameter to take the same value
+as the <CODE>width</CODE> parameter unless explicitly specified.</P><P>Occasionally, it's useful to know whether the value of an optional
+argument was supplied by the caller or is the default value. Rather
+than writing code to check whether the value of the parameter is the
+default (which doesn't work anyway, if the caller happens to
+explicitly pass the default value), you can add another variable name
+to the parameter specifier after the default-value expression. This
+variable will be bound to true if the caller actually supplied an
+argument for this parameter and <CODE><B>NIL</B></CODE> otherwise. By convention,
+these variables are usually named the same as the actual parameter
+with a &quot;-supplied-p&quot; on the end. For example:</P><PRE>(defun foo (a b &amp;optional (c 3 c-supplied-p))
+  (list a b c c-supplied-p))</PRE><P>This gives results like this: </P><PRE>(foo 1 2)   ==&gt; (1 2 3 NIL)
+(foo 1 2 3) ==&gt; (1 2 3 T)
+(foo 1 2 4) ==&gt; (1 2 4 T)</PRE><A NAME="rest-parameters"><H2>Rest Parameters</H2></A><P>Optional parameters are just the thing when you have discrete
+parameters for which the caller may or may not want to provide
+values. But some functions need to take a variable number of
+arguments. Several of the built-in functions you've seen already work
+this way. <CODE><B>FORMAT</B></CODE> has two required arguments, the stream and the
+control string. But after that it needs a variable number of
+arguments depending on how many values need to be interpolated into
+the control string. The <CODE><B>+</B></CODE> function also takes a variable number
+of arguments--there's no particular reason to limit it to summing
+just two numbers; it will sum any number of values. (It even works
+with zero arguments, returning 0, the identity under addition.) The
+following are all legal calls of those two functions:</P><PRE>(format t &quot;hello, world&quot;)
+(format t &quot;hello, ~a&quot; name)
+(format t &quot;x: ~d y: ~d&quot; x y)
+(+)
+(+ 1)
+(+ 1 2)
+(+ 1 2 3)</PRE><P>Obviously, you could write functions taking a variable number of
+arguments by simply giving them a lot of optional parameters. But
+that would be incredibly painful--just writing the parameter list
+would be bad enough, and that doesn't get into dealing with all the
+parameters in the body of the function. To do it properly, you'd have
+to have as many optional parameters as the number of arguments that
+can legally be passed in a function call. This number is
+implementation dependent but guaranteed to be at least 50. And in
+current implementations it ranges from 4,096 to 536,870,911.<SUP>6</SUP> Blech. That kind of mind-bending
+tedium is definitely <I>not</I> The Lisp Way. </P><P>Instead, Lisp lets you include a catchall parameter after the symbol
+<CODE><B>&amp;rest</B></CODE>. If a function includes a <CODE><B>&amp;rest</B></CODE> parameter, any
+arguments remaining after values have been doled out to all the
+required and optional parameters are gathered up into a list that
+becomes the value of the <CODE><B>&amp;rest</B></CODE> parameter. Thus, the parameter
+lists for <CODE><B>FORMAT</B></CODE> and <CODE><B>+</B></CODE> probably look something like this:</P><PRE>(defun format (stream string &amp;rest values) ...)
+(defun + (&amp;rest numbers) ...) </PRE><A NAME="keyword-parameters"><H2>Keyword Parameters</H2></A><P>Optional and rest parameters give you quite a bit of flexibility, but
+neither is going to help you out much in the following situation:
+Suppose you have a function that takes four optional parameters. Now
+suppose that most of the places the function is called, the caller
+wants to provide a value for only one of the four parameters and,
+further, that the callers are evenly divided as to which parameter
+they will use.</P><P>The callers who want to provide a value for the first parameter are
+fine--they just pass the one optional argument and leave off the
+rest. But all the other callers have to pass some value for between
+one and three arguments they don't care about. Isn't that exactly the
+problem optional parameters were designed to solve?</P><P>Of course it is. The problem is that optional parameters are still
+positional--if the caller wants to pass an explicit value for the
+fourth optional parameter, it turns the first three optional
+parameters into required parameters for that caller. Luckily, another
+parameter flavor, keyword parameters, allow the caller to specify
+which values go with which parameters.</P><P>To give a function keyword parameters, after any required,
+<CODE><B>&amp;optional</B></CODE>, and <CODE><B>&amp;rest</B></CODE> parameters you include the symbol
+<CODE><B>&amp;key</B></CODE> and then any number of keyword parameter specifiers, which
+work like optional parameter specifiers. Here's a function that has
+only keyword parameters: </P><PRE>(defun foo (&amp;key a b c) (list a b c))</PRE><P>When this function is called, each keyword parameters is bound to the
+value immediately following a keyword of the same name. Recall from
+Chapter 4 that keywords are names that start with a colon and that
+they're automatically defined as self-evaluating constants.</P><P>If a given keyword doesn't appear in the argument list, then the
+corresponding parameter is assigned its default value, just like an
+optional parameter. Because the keyword arguments are labeled, they
+can be passed in any order as long as they follow any required
+arguments. For instance, <CODE>foo</CODE> can be invoked as follows:</P><PRE>(foo)                ==&gt; (NIL NIL NIL)
+(foo :a 1)           ==&gt; (1 NIL NIL)
+(foo :b 1)           ==&gt; (NIL 1 NIL)
+(foo :c 1)           ==&gt; (NIL NIL 1)
+(foo :a 1 :c 3)      ==&gt; (1 NIL 3)
+(foo :a 1 :b 2 :c 3) ==&gt; (1 2 3)
+(foo :a 1 :c 3 :b 2) ==&gt; (1 2 3)</PRE><P>As with optional parameters, keyword parameters can provide a default
+value form and the name of a supplied-p variable. In both keyword and
+optional parameters, the default value form can refer to parameters
+that appear earlier in the parameter list. </P><PRE>(defun foo (&amp;key (a 0) (b 0 b-supplied-p) (c (+ a b)))
+  (list a b c b-supplied-p))
+
+(foo :a 1)           ==&gt; (1 0 1 NIL)
+(foo :b 1)           ==&gt; (0 1 1 T)
+(foo :b 1 :c 4)      ==&gt; (0 1 4 T)
+(foo :a 2 :b 1 :c 4) ==&gt; (2 1 4 T)</PRE><P>Also, if for some reason you want the keyword the caller uses to
+specify the parameter to be different from the name of the actual
+parameter, you can replace the parameter name with another list
+containing the keyword to use when calling the function and the name
+to be used for the parameter. The following definition of <CODE>foo</CODE>:</P><PRE>(defun foo (&amp;key ((:apple a)) ((:box b) 0) ((:charlie c) 0 c-supplied-p))
+  (list a b c c-supplied-p))</PRE><P>lets the caller call it like this:</P><PRE>(foo :apple 10 :box 20 :charlie 30) ==&gt; (10 20 30 T)</PRE><P>This style is mostly useful if you want to completely decouple the
+public API of the function from the internal details, usually because
+you want to use short variable names internally but descriptive
+keywords in the API. It's not, however, very frequently used. </P><A NAME="mixing-different-parameter-types"><H2>Mixing Different Parameter Types</H2></A><P>It's possible, but rare, to use all four flavors of parameters in a
+single function. Whenever more than one flavor of parameter is used,
+they must be declared in the order I've discussed them: first the
+names of the required parameters, then the optional parameters, then
+the rest parameter, and finally the keyword parameters. Typically,
+however, in functions that use multiple flavors of parameters, you'll
+combine required parameters with one other flavor or possibly combine
+<CODE><B>&amp;optional</B></CODE> and <CODE><B>&amp;rest</B></CODE> parameters. The other two combinations,
+either <CODE><B>&amp;optional</B></CODE> or <CODE><B>&amp;rest</B></CODE> parameters combined with
+<CODE><B>&amp;key</B></CODE> parameters, can lead to somewhat surprising behavior.</P><P>Combining <CODE><B>&amp;optional</B></CODE> and <CODE><B>&amp;key</B></CODE> parameters yields surprising
+enough results that you should probably avoid it altogether. The
+problem is that if a caller doesn't supply values for all the
+optional parameters, then those parameters will eat up the keywords
+and values intended for the keyword parameters. For instance, this
+function unwisely mixes <CODE><B>&amp;optional</B></CODE> and <CODE><B>&amp;key</B></CODE> parameters:</P><PRE>(defun foo (x &amp;optional y &amp;key z) (list x y z))</PRE><P>If called like this, it works fine:</P><PRE>(foo 1 2 :z 3) ==&gt; (1 2 3)</PRE><P>And this is also fine:</P><PRE>(foo 1)  ==&gt; (1 nil nil)</PRE><P>But this will signal an error:</P><PRE>(foo 1 :z 3) ==&gt; <I>ERROR</I></PRE><P>This is because the keyword <CODE>:z</CODE> is taken as a value to fill the
+optional <CODE>y</CODE> parameter, leaving only the argument 3 to be
+processed. At that point, Lisp will be expecting either a
+keyword/value pair or nothing and will complain. Perhaps even worse,
+if the function had had two <CODE><B>&amp;optional</B></CODE> parameters, this last call
+would have resulted in the values <CODE>:z</CODE> and 3 being bound to the
+two <CODE><B>&amp;optional</B></CODE> parameters and the <CODE><B>&amp;key</B></CODE> parameter <CODE>z</CODE>
+getting the default value <CODE><B>NIL</B></CODE> with no indication that anything
+was amiss.</P><P>In general, if you find yourself writing a function that uses both
+<CODE><B>&amp;optional</B></CODE> and <CODE><B>&amp;key</B></CODE> parameters, you should probably just
+change it to use all <CODE><B>&amp;key</B></CODE> parameters--they're more flexible, and
+you can always add new keyword parameters without disturbing existing
+callers of the function. You can also remove keyword parameters, as
+long as no one is using them.<SUP>7</SUP> In
+general, using keyword parameters helps make code much easier to
+maintain and evolve--if you need to add some new behavior to a
+function that requires new parameters, you can add keyword parameters
+without having to touch, or even recompile, any existing code that
+calls the function. </P><P>You can safely combine <CODE><B>&amp;rest</B></CODE> and <CODE><B>&amp;key</B></CODE> parameters, but the
+behavior may be a bit surprising  initially. Normally the presence of
+either <CODE><B>&amp;rest</B></CODE> or <CODE><B>&amp;key</B></CODE> in a parameter list causes all the
+values remaining after the required and <CODE><B>&amp;optional</B></CODE> parameters
+have been filled in to be processed in a particular way--either
+gathered into a list for a <CODE><B>&amp;rest</B></CODE> parameter or assigned to the
+appropriate <CODE><B>&amp;key</B></CODE> parameters based on the keywords. If both
+<CODE><B>&amp;rest</B></CODE> and <CODE><B>&amp;key</B></CODE> appear in a parameter list, then both things
+happen--all the remaining values, which include the keywords
+themselves, are gathered into a list that's bound to the <CODE><B>&amp;rest</B></CODE>
+parameter, and the appropriate values are also bound to the <CODE><B>&amp;key</B></CODE>
+parameters. So, given this function: </P><PRE>(defun foo (&amp;rest rest &amp;key a b c) (list rest a b c))</PRE><P>you get this result:</P><PRE>(foo :a 1 :b 2 :c 3)  ==&gt; ((:A 1 :B 2 :C 3) 1 2 3)</PRE><A NAME="function-return-values"><H2>Function Return Values</H2></A><P>All the functions you've written so far have used the default
+behavior of returning the value of the last expression evaluated as
+their own return value. This is the most common way to return a value
+from a function.</P><P>However, sometimes it's convenient to be able to return from the
+middle of a function such as when you want to break out of nested
+control constructs. In such cases you can use the <CODE><B>RETURN-FROM</B></CODE>
+special operator to immediately return any value from the function.</P><P>You'll see in Chapter 20 that <CODE><B>RETURN-FROM</B></CODE> is actually not tied
+to functions at all; it's used to return from a block of code defined
+with the <CODE><B>BLOCK</B></CODE> special operator. However, <CODE><B>DEFUN</B></CODE>
+automatically wraps the whole function body in a block with the same
+name as the function. So, evaluating a <CODE><B>RETURN-FROM</B></CODE> with the name
+of the function and the value you want to return will cause the
+function to immediately exit with that value. <CODE><B>RETURN-FROM</B></CODE> is a
+special operator whose first &quot;argument&quot; is the name of the block from
+which to return. This name isn't evaluated and thus isn't quoted.</P><P>The following function uses nested loops to find the first pair of
+numbers, each less than 10, whose product is greater than the
+argument, and it uses <CODE><B>RETURN-FROM</B></CODE> to return the pair as soon as
+it finds it:</P><PRE>(defun foo (n)
+  (dotimes (i 10)
+    (dotimes (j 10)
+      (when (&gt; (* i j) n)
+        (return-from foo (list i j))))))</PRE><P>Admittedly, having to specify the name of the function you're
+returning from is a bit of a pain--for one thing, if you change the
+function's name, you'll need to change the name used in the
+<CODE><B>RETURN-FROM</B></CODE> as well.<SUP>8</SUP> But
+it's also the case that explicit <CODE><B>RETURN-FROM</B></CODE>s are used much less
+frequently in Lisp than <CODE>return</CODE> statements in C-derived
+languages, because <I>all</I> Lisp expressions, including control
+constructs such as loops and conditionals, evaluate to a value. So
+it's not much of a problem in practice. </P><A NAME="functions-as-data-aka-higher-order-functions"><H2>Functions As Data, a.k.a. Higher-Order Functions</H2></A><P>While the main way you use functions is to call them by name, a
+number of situations exist where it's useful to be able treat
+functions as data. For instance, if you can pass one function as an
+argument to another, you can write a general-purpose sorting function
+while allowing the caller to provide a function that's responsible
+for comparing any two elements. Then the same underlying algorithm
+can be used with many different comparison functions. Similarly,
+callbacks and hooks depend on being able to store references to code
+in order to run it later. Since functions are already the standard
+way to abstract bits of code, it makes sense to allow functions to be
+treated as data.<SUP>9</SUP></P><P>In Lisp, functions are just another kind of object. When you define a
+function with <CODE><B>DEFUN</B></CODE>, you're really doing two things: creating a
+new function object and giving it a name. It's also possible, as you
+saw in Chapter 3, to use <CODE><B>LAMBDA</B></CODE> expressions to create a function
+without giving it a name. The actual representation of a function
+object, whether named or anonymous, is opaque--in a native-compiling
+Lisp, it probably consists mostly of machine code. The only things
+you need to know are how to get hold of it and how to invoke it once
+you've got it.</P><P>The special operator <CODE><B>FUNCTION</B></CODE> provides the mechanism for getting
+at a function object. It takes a single argument and returns the
+function with that name. The name isn't quoted. Thus, if you've
+defined a function <CODE>foo</CODE>, like so:</P><PRE>CL-USER&gt; (defun foo (x) (* 2 x))
+FOO</PRE><P>you can get the function object like this:<SUP>10</SUP></P><PRE>CL-USER&gt; (function foo)
+#&lt;Interpreted Function FOO&gt;</PRE><P>In fact, you've already used <CODE><B>FUNCTION</B></CODE>, but it was in disguise.
+The syntax <CODE>#'</CODE>, which you used in Chapter 3, is syntactic sugar
+for <CODE><B>FUNCTION</B></CODE>, just the way <CODE>'</CODE> is syntactic sugar for
+<CODE><B>QUOTE</B></CODE>.<SUP>11</SUP> Thus, you can also get
+the function object for <CODE>foo</CODE> like this: </P><PRE>CL-USER&gt; #'foo
+#&lt;Interpreted Function FOO&gt;</PRE><P>Once you've got the function object, there's really only one thing
+you can do with it--invoke it. Common Lisp provides two functions
+for invoking a function through a function object: <CODE><B>FUNCALL</B></CODE> and
+<CODE><B>APPLY</B></CODE>.<SUP>12</SUP>  They differ
+only in how they obtain the arguments to pass to the function. </P><P><CODE><B>FUNCALL</B></CODE> is the one to use when you know the number of arguments
+you're going to pass to the function at the time you write the code.
+The first argument to <CODE><B>FUNCALL</B></CODE> is the function object to be
+invoked, and the rest of the arguments are passed onto that function.
+Thus, the following two expressions are equivalent:</P><PRE>(foo 1 2 3) === (funcall #'foo 1 2 3)</PRE><P>However, there's little point in using <CODE><B>FUNCALL</B></CODE> to call a
+function whose name you know when you write the code. In fact, the
+previous two expressions will quite likely compile to exactly the
+same machine instructions.</P><P>The following function demonstrates a more apt use of <CODE><B>FUNCALL</B></CODE>.
+It accepts a function object as an argument and plots a simple
+ASCII-art histogram of the values returned by the argument function
+when it's invoked on the values from <CODE>min</CODE> to <CODE>max</CODE>,
+stepping by <CODE>step</CODE>.</P><PRE>(defun plot (fn min max step)
+  (loop for i from min to max by step do
+        (loop repeat (funcall fn i) do (format t &quot;*&quot;))
+        (format t &quot;~%&quot;)))</PRE><P>The <CODE><B>FUNCALL</B></CODE> expression computes the value of the function for
+each value of <CODE>i</CODE>. The inner <CODE><B>LOOP</B></CODE> uses that computed value
+to determine how many times to print an asterisk to standard output.</P><P>Note that you don't use <CODE><B>FUNCTION</B></CODE> or <CODE>#'</CODE> to get the
+function value of <CODE>fn</CODE>; you <I>want</I> it to be interpreted as a
+variable because it's the variable's value that will be the function
+object. You can call <CODE>plot</CODE> with any function that takes a
+single numeric argument, such as the built-in function <CODE><B>EXP</B></CODE> that
+returns the value of <I>e</I> raised to the power of its argument. </P><PRE>CL-USER&gt; (plot #'exp 0 4 1/2)
+*
+*
+**
+****
+*******
+************
+********************
+*********************************
+******************************************************
+NIL</PRE><P><CODE><B>FUNCALL</B></CODE>, however, doesn't do you any good when the argument list
+is known only at runtime. For instance, to stick with the <CODE>plot</CODE>
+function for another moment, suppose you've obtained a list
+containing a function object, a minimum and maximum value, and a step
+value. In other words, the list contains the values you want to pass
+as arguments to <CODE>plot</CODE>. Suppose this list is in the variable
+<CODE>plot-data</CODE>. You could invoke <CODE>plot</CODE> on the values in that
+list like this: </P><PRE>(plot (first plot-data) (second plot-data) (third plot-data) (fourth plot-data))</PRE><P>This works fine, but it's pretty annoying to have to explicitly
+unpack the arguments just so you can pass them to <CODE>plot</CODE>.</P><P>That's where <CODE><B>APPLY</B></CODE> comes in. Like <CODE><B>FUNCALL</B></CODE>, the first
+argument to <CODE><B>APPLY</B></CODE> is a function object. But after the function
+object, instead of individual arguments, it expects a list. It then
+applies the function to the values in the list. This allows you to
+write the following instead:</P><PRE>(apply #'plot plot-data)</PRE><P>As a further convenience, <CODE><B>APPLY</B></CODE> can also accept &quot;loose&quot;
+arguments as long as the last argument is a list. Thus, if
+<CODE>plot-data</CODE> contained just the min, max, and step values, you
+could still use <CODE><B>APPLY</B></CODE> like this to plot the <CODE><B>EXP</B></CODE> function
+over that range:</P><PRE>(apply #'plot #'exp plot-data)</PRE><P><CODE><B>APPLY</B></CODE> doesn't care about whether the function being applied
+takes <CODE><B>&amp;optional</B></CODE>, <CODE><B>&amp;rest</B></CODE>, or <CODE><B>&amp;key</B></CODE> arguments--the
+argument list produced by combining any loose arguments with the
+final list must be a legal argument list for the function with enough
+arguments for all the required parameters and only appropriate
+keyword parameters. </P><A NAME="anonymous-functions"><H2>Anonymous Functions</H2></A><P>Once you start writing, or even simply using, functions that accept
+other functions as arguments, you're bound to discover that sometimes
+it's annoying to have to define and name a whole separate function
+that's used in only one place, especially when you never call it by
+name.</P><P>When it seems like overkill to define a new function with <CODE><B>DEFUN</B></CODE>,
+you can create an &quot;anonymous&quot; function using a <CODE><B>LAMBDA</B></CODE>
+expression. As discussed in Chapter 3, a <CODE><B>LAMBDA</B></CODE> expression looks
+like this:</P><PRE>(lambda (<I>parameters</I>) <I>body</I>)</PRE><P>One way to think of <CODE><B>LAMBDA</B></CODE> expressions is as a special kind of
+function name where the name itself directly describes what the
+function does. This explains why you can use a <CODE><B>LAMBDA</B></CODE> expression
+in the place of a function name with <CODE>#'</CODE>.</P><PRE>(funcall #'(lambda (x y) (+ x y)) 2 3) ==&gt; 5</PRE><P>You can even use a <CODE><B>LAMBDA</B></CODE> expression as the &quot;name&quot; of a function
+in a function call expression. If you wanted, you could write the
+previous <CODE><B>FUNCALL</B></CODE> expression more concisely. </P><PRE>((lambda (x y) (+ x y)) 2 3) ==&gt; 5</PRE><P>But this is almost never done; it's merely worth noting that it's
+legal in order to emphasize that <CODE><B>LAMBDA</B></CODE> expressions can be used
+anywhere a normal function name can be.<SUP>13</SUP></P><P>Anonymous functions can be useful when you need to pass a function as
+an argument to another function and the function you need to pass is
+simple enough to express inline. For instance, suppose you wanted to
+plot the function <I>2x</I>. You <I>could</I> define the following
+function: </P><PRE>(defun double (x) (* 2 x))</PRE><P>which you could then pass to <CODE>plot</CODE>.</P><PRE>CL-USER&gt; (plot #'double 0 10 1)
+
+**
+****
+******
+********
+**********
+************
+**************
+****************
+******************
+********************
+NIL</PRE><P>But it's easier, and arguably clearer, to write this:</P><PRE>CL-USER&gt; (plot #'(lambda (x) (* 2 x)) 0 10 1)
+
+**
+****
+******
+********
+**********
+************
+**************
+****************
+******************
+********************
+NIL</PRE><P>The other important use of <CODE><B>LAMBDA</B></CODE> expressions is in making
+<I>closures</I>, functions that capture part of the environment where
+they're created. You used closures a bit in Chapter 3, but the
+details of how closures work and what they're used for is really more
+about how variables work than functions, so I'll save that discussion
+for the next chapter. 
+</P><HR/><DIV CLASS="notes"><P><SUP>1</SUP>Despite the importance of functions in Common Lisp, it
+isn't really accurate to describe it as a <I>functional</I> language.
+It's true some of Common Lisp's features, such as its list
+manipulation functions, are designed to be used in a body-form* style
+and that Lisp has a prominent place in the history of functional
+programming--McCarthy introduced many ideas that are now considered
+important in functional programming--but Common Lisp was
+intentionally designed to support many different styles of
+programming. In the Lisp family, Scheme is the nearest thing to a
+&quot;pure&quot; functional language, and even it has several features that
+disqualify it from absolute purity compared to languages such as
+Haskell and ML.</P><P><SUP>2</SUP>Well, almost any
+symbol. It's undefined what happens if you use any of the names
+defined in the language standard as a name for one of your own
+functions. However, as you'll see in Chapter 21, the Lisp package
+system allows you to create names in different namespaces, so this
+isn't really an issue.</P><P><SUP>3</SUP>Parameter lists are sometimes also called <I>lambda
+lists</I> because of the historical relationship between Lisp's notion
+of functions and the lambda calculus.</P><P><SUP>4</SUP>For example, the following:</P><PRE>(documentation 'foo 'function)</PRE><P>returns the documentation string for the function <CODE>foo</CODE>. Note,
+however, that documentation strings are intended for human
+consumption, not programmatic access. A Lisp implementation isn't
+<I>required</I> to store them and is allowed to discard them at any time,
+so portable programs shouldn't depend on their presence. In some
+implementations an implementation-defined variable needs to be set
+before it will store documentation strings.</P><P><SUP>5</SUP>In languages that don't support optional parameters
+directly, programmers typically find ways to simulate them. One
+technique is to use distinguished &quot;no-value&quot; values that the caller
+can pass to indicate they want the default value of a given
+parameter. In C, for example, it's common to use <CODE>NULL</CODE> as such
+a distinguished value. However, such a protocol between the function
+and its callers is ad hoc--in some functions or for some arguments
+<CODE>NULL</CODE> may be the distinguished value while in other functions
+or for other arguments the magic value may be -1 or some
+<CODE>#defined</CODE> constant.</P><P><SUP>6</SUP>The
+constant <CODE><B>CALL-ARGUMENTS-LIMIT</B></CODE> tells you the
+implementation-specific value.</P><P><SUP>7</SUP>Four standard functions take
+both<CODE><B> &amp;optional</B></CODE> and <CODE><B>&amp;key</B></CODE> arguments--<CODE><B>READ-FROM-STRING</B></CODE>,
+<CODE><B>PARSE-NAMESTRING</B></CODE>, <CODE><B>WRITE-LINE</B></CODE>, and <CODE><B>WRITE-STRING</B></CODE>. They
+were left that way during standardization for backward compatibility
+with earlier Lisp dialects. <CODE><B>READ-FROM-STRING</B></CODE> tends to be the one
+that catches new Lisp programmers most frequently--a call such as
+<CODE>(read-from-string s :start 10)</CODE> seems to ignore the
+<CODE>:start</CODE> keyword argument, reading from index 0 instead of 10.
+That's because <CODE><B>READ-FROM-STRING </B></CODE>also has two <CODE><B>&amp;optional</B></CODE>
+parameters that swallowed up the arguments <CODE>:start</CODE> and 10.</P><P><SUP>8</SUP>Another macro, <CODE><B>RETURN</B></CODE>, doesn't
+require a name. However, you can't use it instead of <CODE><B>RETURN-FROM</B></CODE>
+to avoid having to specify the function name; it's syntactic sugar
+for returning from a block named <CODE><B>NIL</B></CODE>. I'll cover it, along with
+the details of <CODE><B>BLOCK</B></CODE> and <CODE><B>RETURN-FROM</B></CODE>, in Chapter 20.</P><P><SUP>9</SUP>Lisp, of course, isn't the only language to
+treat functions as data. C uses function pointers, Perl uses
+subroutine references, Python uses a scheme similar to Lisp, and C#
+introduces delegates, essentially typed function pointers, as an
+improvement over Java's rather clunky reflection and anonymous class
+mechanisms.</P><P><SUP>10</SUP>The exact printed
+representation of a function object will differ from implementation
+to implementation.</P><P><SUP>11</SUP>The best way to think of <CODE><B>FUNCTION</B></CODE> is as a
+special kind of quotation.<CODE><B> QUOTE</B></CODE>ing a symbol prevents it from
+being evaluated at all, resulting in the symbol itself rather than
+the value of the variable named by that symbol. <CODE><B>FUNCTION</B></CODE> also
+circumvents the normal evaluation rule but, instead of preventing the
+symbol from being evaluated at all, causes it to be evaluated as the
+name of a function, just the way it would if it were used as the
+function name in a function call expression.</P><P><SUP>12</SUP>There's actually a third, the special operator
+<CODE><B>MULTIPLE-VALUE-CALL</B></CODE>, but I'll save that for when I discuss
+expressions that return multiple values in Chapter 20.</P><P><SUP>13</SUP>In Common Lisp it's also
+possible to use a <CODE><B>LAMBDA</B></CODE> expression as an argument to
+<CODE><B>FUNCALL</B></CODE> (or some other function that takes a function argument
+such as <CODE><B>SORT</B></CODE> or <CODE><B>MAPCAR</B></CODE>) with no <CODE>#'</CODE> before it, like
+this:</P><PRE>(funcall (lambda (x y) (+ x y)) 2 3)</PRE><P>This is legal and is equivalent to the version with the <CODE>#'</CODE> but
+for a tricky reason. Historically <CODE><B>LAMBDA</B></CODE> expressions by
+themselves weren't expressions that could be evaluated. That is
+<CODE><B>LAMBDA</B></CODE> wasn't the name of a function, macro, or special operator.
+Rather, a list starting with the symbol <CODE><B>LAMBDA</B></CODE> was a special
+syntactic construct that Lisp recognized as a kind of function name.</P><P>But if that were still true, then <CODE>(funcall (lambda (...) ...))</CODE>
+would be illegal because <CODE><B>FUNCALL</B></CODE> is a function and the normal
+evaluation rule for a function call would require that the <CODE><B>LAMBDA</B></CODE>
+expression be evaluated. However, late in the ANSI standardization
+process, in order to make it possible to implement ISLISP, another
+Lisp dialect being standardized at the same time, strictly as a
+user-level compatibility layer on top of Common Lisp, a <CODE><B>LAMBDA</B></CODE>
+macro was defined that expands into a call to <CODE><B>FUNCTION</B></CODE> wrapped
+around the <CODE><B>LAMBDA</B></CODE> expression. In other words, the following
+<CODE><B>LAMBDA</B></CODE> expression:</P><PRE>(lambda () 42)</PRE><P>exands into the following when it occurs in a context where it evaluated:</P><PRE>(function (lambda () 42))   ; or #'(lambda () 42)</PRE><P>This makes its use in a value position, such as an argument to
+<CODE><B>FUNCALL</B></CODE>, legal. In other words, it's pure syntactic sugar. Most
+folks either always use <CODE>#'</CODE> before <CODE><B>LAMBDA</B></CODE> expressions in
+value positions or never do. In this book, I always use <CODE>#'</CODE>.</P></DIV></BODY></HTML>

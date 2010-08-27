@@ -1,0 +1,967 @@
+<HTML><HEAD><TITLE>Practical: Parsing Binary Files</TITLE><LINK REL="stylesheet" TYPE="text/css" HREF="style.css"/></HEAD><BODY><DIV CLASS="copyright">Copyright &copy; 2003-2005, Peter Seibel</DIV><H1>24. Practical: Parsing Binary Files</H1><P>In this chapter I'll show you how to build a library that you can use
+to write code for reading and writing binary files. You'll use this
+library in Chapter 25 to write a parser for ID3 tags, the mechanism
+used to store metadata such as artist and album names in MP3 files.
+This library is also an example of how to use macros to extend the
+language with new constructs, turning it into a special-purpose
+language for solving a particular problem, in this case reading and
+writing binary data. Because you'll develop the library a bit at a
+time, including several partial versions, it may seem you're writing a
+lot of code. But when all is said and done, the whole library is fewer
+than 150 lines of code, and the longest macro is only 20 lines long.</P><A NAME="binary-files"><H2>Binary Files</H2></A><P>At a sufficiently low level of abstraction, all files are &quot;binary&quot; in
+the sense that they just contain a bunch of numbers encoded in binary
+form. However, it's customary to distinguish between <I>text files</I>,
+where all the numbers can be interpreted as characters representing
+human-readable text, and <I>binary files</I>, which contain data that,
+if interpreted as characters, yields nonprintable characters.<SUP>1</SUP></P><P>Binary file formats are usually designed to be both compact and
+efficient to parse--that's their main advantage over text-based
+formats. To meet both those criteria, they're usually composed of
+on-disk structures that are easily mapped to data structures that a
+program might use to represent the same data in memory.<SUP>2</SUP></P><P>The library will give you an easy way to define the mapping between
+the on-disk structures defined by a binary file format and in-memory
+Lisp objects. Using the library, it should be easy to write a program
+that can read a binary file, translating it into Lisp objects that
+you can manipulate, and then write back out to another properly
+formatted binary file.</P><A NAME="binary-format-basics"><H2>Binary Format Basics</H2></A><P>The starting point for reading and writing binary files is to open the
+file for reading or writing individual bytes. As I discussed in
+Chapter 14, both <CODE><B>OPEN</B></CODE> and <CODE><B>WITH-OPEN-FILE</B></CODE> accept a keyword
+argument, <CODE>:element-type</CODE>, that controls the basic unit of
+transfer for the stream. When you're dealing with binary files,
+you'll specify <CODE>(unsigned-byte 8)</CODE>. An input stream opened with
+such an <CODE>:element-type</CODE> will return an integer between 0 and 255
+each time it's passed to <CODE><B>READ-BYTE</B></CODE>. Conversely, you can write
+bytes to an <CODE>(unsigned-byte 8)</CODE> output stream by passing numbers
+between 0 and 255 to <CODE><B>WRITE-BYTE</B></CODE>.</P><P>Above the level of individual bytes, most binary formats use a
+smallish number of primitive data types--numbers encoded in various
+ways, textual strings, bit fields, and so on--which are then composed
+into more complex structures. So your first task is to define a
+framework for writing code to read and write the primitive data types
+used by a given binary format.</P><P>To take a simple example, suppose you're dealing with a binary format
+that uses an unsigned 16-bit integer as a primitive data type. To
+read such an integer, you need to read the two bytes and then combine
+them into a single number by multiplying one byte by 256, a.k.a. 2^8,
+and adding it to the other byte. For instance, assuming the binary
+format specifies that such 16-bit quantities are stored in
+<I>big-endian</I><SUP>3</SUP> form,
+with the most significant byte first, you can read such a number with
+this function:</P><PRE>(defun read-u2 (in)
+  (+ (* (read-byte in) 256) (read-byte in)))</PRE><P>However, Common Lisp provides a more convenient way to perform this
+kind of bit twiddling. The function <CODE><B>LDB</B></CODE>, whose name stands for
+load byte, can be used to extract and set (with <CODE><B>SETF</B></CODE>) any number
+of contiguous bits from an integer.<SUP>4</SUP> The number of bits and their position within the
+integer is specified with a <I>byte specifier</I> created with the
+<CODE><B>BYTE</B></CODE> function. <CODE><B>BYTE</B></CODE> takes two arguments, the number of bits
+to extract (or set) and the position of the rightmost bit where the
+least significant bit is at position zero. <CODE><B>LDB</B></CODE> takes a byte
+specifier and the integer from which to extract the bits and returns
+the positive integer represented by the extracted bits. Thus, you can
+extract the least significant octet of an integer like this:</P><PRE>(ldb (byte 8 0) #xabcd) ==&gt; 205 ; 205 is #xcd</PRE><P>To get the next octet, you'd use a byte specifier of <CODE>(byte 8
+8)</CODE> like this:</P><PRE>(ldb (byte 8 8) #xabcd) ==&gt; 171 ; 171 is #xab</PRE><P>You can use <CODE><B>LDB</B></CODE> with <CODE><B>SETF</B></CODE> to set the specified bits of an
+integer stored in a <CODE><B>SETF</B></CODE>able place.</P><PRE>CL-USER&gt; (defvar *num* 0)
+*NUM*
+CL-USER&gt; (setf (ldb (byte 8 0) *num*) 128)
+128
+CL-USER&gt; *num*
+128
+CL-USER&gt; (setf (ldb (byte 8 8) *num*) 255)
+255
+CL-USER&gt; *num*
+65408</PRE><P>Thus, you can also write <CODE>read-u2</CODE> like this:<SUP>5</SUP></P><PRE>(defun read-u2 (in)
+  (let ((u2 0))
+    (setf (ldb (byte 8 8) u2) (read-byte in))
+    (setf (ldb (byte 8 0) u2) (read-byte in))
+    u2))</PRE><P>To write a number out as a 16-bit integer, you need to extract the
+individual 8-bit bytes and write them one at a time. To extract the
+individual bytes, you just need to use <CODE><B>LDB</B></CODE> with the same byte
+specifiers.</P><PRE>(defun write-u2 (out value)
+  (write-byte (ldb (byte 8 8) value) out)
+  (write-byte (ldb (byte 8 0) value) out))</PRE><P>Of course, you can also encode integers in many other ways--with
+different numbers of bytes, with different endianness, and in signed
+and unsigned format.</P><A NAME="strings-in-binary-files"><H2>Strings in Binary Files</H2></A><P>Textual strings are another kind of primitive data type you'll find
+in many binary formats. When you read files one byte at a time, you
+can't read and write strings directly--you need to decode and encode
+them one byte at a time, just as you do with binary-encoded numbers.
+And just as you can encode an integer in several ways, you can encode
+a string in many ways. To start with, the binary format must specify
+how individual characters are encoded.</P><P>To translate bytes to characters, you need to know both what
+character <I>code</I> and what character <I>encoding</I> you're using. A
+character code defines a mapping from positive integers to
+characters. Each number in the mapping is called a <I>code point</I>.
+For instance, ASCII is a character code that maps the numbers from
+0-127 to particular characters used in the Latin alphabet. A
+character encoding, on the other hand, defines how the code points
+are represented as a sequence of bytes in a byte-oriented medium such
+as a file. For codes that use eight or fewer bits, such as ASCII and
+ISO-8859-1, the encoding is trivial--each numeric value is encoded as
+a single byte.</P><P>Nearly as straightforward are pure double-byte encodings, such as
+UCS-2, which map between 16-bit values and characters. The only
+reason double-byte encodings can be more complex than single-byte
+encodings is that you may also need to know whether the 16-bit values
+are supposed to be encoded in big-endian or little-endian format.</P><P>Variable-width encodings use different numbers of octets for
+different numeric values, making them more complex but allowing them
+to be more compact in many cases. For instance, UTF-8, an encoding
+designed for use with the Unicode character code, uses a single octet
+to encode the values 0-127 while using up to four octets to encode
+values up to 1,114,111.<SUP>6</SUP></P><P>Since the code points from 0-127 map to the same characters in
+Unicode as they do in ASCII, a UTF-8 encoding of text consisting only
+of characters also in ASCII is the same as the ASCII encoding. On the
+other hand, texts consisting mostly of characters requiring four
+bytes in UTF-8 could be more compactly encoded in a straight
+double-byte encoding.</P><P>Common Lisp provides two functions for translating between numeric
+character codes and character objects: <CODE><B>CODE-CHAR</B></CODE>, which takes an
+numeric code and returns as a character, and <CODE><B>CHAR-CODE</B></CODE>, which
+takes a character and returns its numeric code. The language standard
+doesn't specify what character encoding an implementation must use,
+so there's no guarantee you can represent every character that can
+possibly be encoded in a given file format as a Lisp character.
+However, almost all contemporary Common Lisp implementations use
+ASCII, ISO-8859-1, or Unicode as their native character code. Because
+Unicode is a superset ofISO-8859-1, which is in turn a superset of
+ASCII, if you're using a Unicode Lisp, <CODE><B>CODE-CHAR</B></CODE> and
+<CODE><B>CHAR-CODE</B></CODE> can be used directly for translating any of those
+three character codes.<SUP>7</SUP></P><P>In addition to specifying a character encoding, a string encoding
+must also specify how to encode the length of the string. Three
+techniques are typically used in binary file formats.</P><P>The simplest is to not encode it but to let it be implicit in the
+position of the string in some larger structure: a particular element
+of a file may always be a string of a certain length, or a string may
+be the last element of a variable-length data structure whose overall
+size determines how many bytes are left to read as string data. Both
+these techniques are used in ID3 tags, as you'll see in the next
+chapter.</P><P>The other two techniques can be used to encode variable-length
+strings without relying on context. One is to encode the length of
+the string followed by the character data--the parser reads an
+integer value (in some specified integer format) and then reads that
+number of characters. Another is to write the character data followed
+by a delimiter that can't appear in the string such as a null
+character.</P><P>The different representations have different advantages and
+disadvantages, but when you're dealing with already specified binary
+formats, you won't have any control over which encoding is used.
+However, none of the encodings is particularly more difficult to read
+and write than any other. Here, as an example, is a function that
+reads a null-terminated ASCII string, assuming your Lisp
+implementation uses ASCII or one of its supersets such as ISO-8859-1
+or full Unicode as its native character encoding:</P><PRE>(defconstant +null+ (code-char 0))
+
+(defun read-null-terminated-ascii (in)
+  (with-output-to-string (s)
+    (loop for char = (code-char (read-byte in))
+          until (char= char +null+) do (write-char char s))))</PRE><P>The <CODE><B>WITH-OUTPUT-TO-STRING</B></CODE> macro, which I mentioned in Chapter 14,
+is an easy way to build up a string when you don't know how long it'll
+be. It creates a <CODE><B>STRING-STREAM</B></CODE> and binds it to the variable name
+specified, <CODE>s</CODE> in this case. All characters written to the stream
+are collected into a string, which is then returned as the value of
+the <CODE><B>WITH-OUTPUT-TO-STRING</B></CODE> form.</P><P>To write a string back out, you just need to translate the characters
+back to numeric values that can be written with <CODE><B>WRITE-BYTE</B></CODE> and
+then write the null terminator after the string contents.</P><PRE>(defun write-null-terminated-ascii (string out)
+  (loop for char across string
+        do (write-byte (char-code char) out))
+  (write-byte (char-code +null+) out))</PRE><P>As these examples show, the main intellectual challenge--such as it
+is--of reading and writing primitive elements of binary files is
+understanding how exactly to interpret the bytes that appear in a
+file and to map them to Lisp data types. If a binary file format is
+well specified, this should be a straightforward proposition.
+Actually writing functions to read and write a particular encoding
+is, as they say, a simple matter of programming.</P><P>Now you can turn to the issue of reading and writing more complex
+on-disk structures and how to map them to Lisp objects.</P><A NAME="composite-structures"><H2>Composite Structures</H2></A><P>Since binary formats are usually used to represent data in a way that
+makes it easy to map to in-memory data structures, it should come as
+no surprise that composite on-disk structures are usually defined in
+ways similar to the way programming languages define in-memory
+structures. Usually a composite on-disk structure will consist of a
+number of named parts, each of which is itself either a primitive
+type such as a number or a string, another composite structure, or
+possibly a collection of such values.</P><P>For instance, an ID3 tag defined in the 2.2 version of the
+specification consists of a header made up of a three-character
+ISO-8859-1 string, which is always &quot;ID3&quot;; two one-byte unsigned
+integers that specify the major version and revision of the
+specification; eight bits worth of boolean flags; and four bytes that
+encode the size of the tag in an encoding particular to the ID3
+specification. Following the header is a list of <I>frames</I>, each of
+which has its own internal structure. After the frames are as many
+null bytes as are necessary to pad the tag out to the size specified
+in the header.</P><P>If you look at the world through the lens of object orientation,
+composite structures look a lot like classes. For instance, you could
+write a class to represent an ID3 tag.</P><PRE>(defclass id3-tag ()
+  ((identifier    :initarg :identifier    :accessor identifier)
+   (major-version :initarg :major-version :accessor major-version)
+   (revision      :initarg :revision      :accessor revision)
+   (flags         :initarg :flags         :accessor flags)
+   (size          :initarg :size          :accessor size)
+   (frames        :initarg :frames        :accessor frames)))</PRE><P>An instance of this class would make a perfect repository to hold the
+data needed to represent an ID3 tag. You could then write functions
+to read and write instances of this class. For example, assuming the
+existence of certain other functions for reading the appropriate
+primitive data types, a <CODE>read-id3-tag</CODE> function might look like
+this:</P><PRE>(defun read-id3-tag (in)
+  (let ((tag (make-instance 'id3-tag)))
+    (with-slots (identifier major-version revision flags size frames) tag
+      (setf identifier    (read-iso-8859-1-string in :length 3))
+      (setf major-version (read-u1 in))
+      (setf revision      (read-u1 in))
+      (setf flags         (read-u1 in))
+      (setf size          (read-id3-encoded-size in))
+      (setf frames        (read-id3-frames in :tag-size size)))
+    tag))</PRE><P>The <CODE>write-id3-tag</CODE> function would be structured similarly--you'd
+use the appropriate <CODE>write-*</CODE> functions to write out the values
+stored in the slots of the <CODE>id3-tag</CODE> object.</P><P>It's not hard to see how you could write the appropriate classes to
+represent all the composite data structures in a specification along
+with <CODE>read-foo</CODE> and <CODE>write-foo</CODE> functions for each class and
+for necessary primitive types. But it's also easy to tell that all the
+reading and writing functions are going to be pretty similar,
+differing only in the specifics of what types they read and the names
+of the slots they store them in. It's particularly irksome when you
+consider that in the ID3 specification it takes about four lines of
+text to specify the structure of an ID3 tag, while you've already
+written eighteen lines of code and haven't even written
+<CODE>write-id3-tag</CODE> yet.</P><P>What you'd really like is a way to describe the structure of
+something like an ID3 tag in a form that's as compressed as the
+specification's pseudocode yet that can also be expanded into code
+that defines the <CODE>id3-tag</CODE> class <I>and</I> the functions that
+translate between bytes on disk and instances of the class. Sounds
+like a job for a macro.</P><A NAME="designing-the-macros"><H2>Designing the Macros</H2></A><P>Since you already have a rough idea what code your macros will need
+to generate, the next step, according to the process for writing a
+macro I outlined in Chapter 8, is to switch perspectives and think
+about what a call to the macro should look like. Since the goal is to
+be able to write something as compressed as the pseudocode in the ID3
+specification, you can start there. The header of an ID3 tag is
+specified like this:</P><PRE>ID3/file identifier      &quot;ID3&quot;
+ID3 version              $02 00
+ID3 flags                %xx000000
+ID3 size             4 * %0xxxxxxx</PRE><P>In the notation of the specification, this means the &quot;file
+identifier&quot; slot of an ID3 tag is the string &quot;ID3&quot; in ISO-8859-1
+encoding. The version consists of two bytes, the first of which--for
+this version of the specification--has the value 2 and the second of
+which--again for this version of the specification--is 0. The flags
+slot is eight bits, of which all but the first two are 0, and the
+size consists of four bytes, each of which has a 0 in the most
+significant bit.</P><P>Some information isn't captured by this pseudocode. For instance,
+exactly how the four bytes that encode the size are to be interpreted
+is described in a few lines of prose. Likewise, the spec describes in
+prose how the frame and subsequent padding is stored after this
+header. But most of what you need to know to be able to write code to
+read and write an ID3 tag is specified by this pseudocode. Thus, you
+ought to be able to write an s-expression version of this pseudocode
+and have it expanded into the class and function definitions you'd
+otherwise have to write by hand--something, perhaps, like this:</P><PRE>(define-binary-class id3-tag
+  ((file-identifier (iso-8859-1-string :length 3))
+   (major-version   u1)
+   (revision        u1)
+   (flags           u1)
+   (size            id3-tag-size)
+   (frames          (id3-frames :tag-size size))))</PRE><P>The basic idea is that this form defines a class <CODE>id3-tag</CODE>
+similar to the way you could with <CODE><B>DEFCLASS</B></CODE>, but instead of
+specifying things such as <CODE>:initarg</CODE> and <CODE>:accessors</CODE>, each
+slot specification consists of the name of the
+slot--<CODE>file-identifier</CODE>, <CODE>major-version</CODE>, and so on--and
+information about how that slot is represented on disk. Since this is
+just a bit of fantasizing, you don't have to worry about exactly how
+the macro <CODE>define-binary-class</CODE> will know what to do with
+expressions such as <CODE>(iso-8859-1-string :length 3)</CODE>, <CODE>u1</CODE>,
+<CODE>id3-tag-size</CODE>, and <CODE>(id3-frames :tag-size size)</CODE>; as long
+as each expression contains the information necessary to know how to
+read and write a particular data encoding, you should be okay.</P><A NAME="making-the-dream-a-reality"><H2>Making the Dream a Reality</H2></A><P>Okay, enough fantasizing about good-looking code; now you need to get
+to work writing <CODE>define-binary-class</CODE>--writing the code that
+will turn that concise expression of what an ID3 tag looks like into
+code that can represent one in memory, read one off disk, and write
+it back out.</P><P>To start with, you should define a package for this library. Here's
+the package file that comes with the version you can download from
+the book's Web site:</P><PRE>(in-package :cl-user)
+
+(defpackage :com.gigamonkeys.binary-data
+  (:use :common-lisp :com.gigamonkeys.macro-utilities)
+  (:export :define-binary-class
+           :define-tagged-binary-class
+           :define-binary-type
+           :read-value
+           :write-value
+           :*in-progress-objects*
+           :parent-of-type
+           :current-binary-object
+           :+null+))</PRE><P>The <CODE>COM.GIGAMONKEYS.MACRO-UTILITIES</CODE> package contains the
+<CODE>with-gensyms</CODE> and <CODE>once-only</CODE> macros from Chapter 8.</P><P>Since you already have a handwritten version of the code you want to
+generate, it shouldn't be too hard to write such a macro. Just take
+it in small pieces, starting with a version of
+<CODE>define-binary-class</CODE> that generates just the <CODE><B>DEFCLASS</B></CODE>
+form.</P><P>If you look back at the <CODE>define-binary-class</CODE> form, you'll see
+that it takes two arguments, the name <CODE>id3-tag</CODE> and a list of
+slot specifiers, each of which is itself a two-item list. From those
+pieces you need to build the appropriate <CODE><B>DEFCLASS</B></CODE> form. Clearly,
+the biggest difference between the <CODE>define-binary-class</CODE> form
+and a proper <CODE><B>DEFCLASS</B></CODE> form is in the slot specifiers. A single
+slot specifier from <CODE>define-binary-class</CODE> looks something like
+this:</P><PRE>(major-version u1)</PRE><P>But that's not a legal slot specifier for a <CODE><B>DEFCLASS</B></CODE>. Instead,
+you need something like this:</P><PRE>(major-version :initarg :major-version :accessor major-version)</PRE><P>Easy enough. First define a simple function to translate a symbol to
+the corresponding keyword symbol.</P><PRE>(defun as-keyword (sym) (intern (string sym) :keyword))</PRE><P>Now define a function that takes a <CODE>define-binary-class</CODE> slot
+specifier and returns a <CODE><B>DEFCLASS</B></CODE> slot specifier.</P><PRE>(defun slot-&gt;defclass-slot (spec)
+  (let ((name (first spec)))
+    `(,name :initarg ,(as-keyword name) :accessor ,name)))</PRE><P>You can test this function at the REPL after switching to your new
+package with a call to <CODE><B>IN-PACKAGE</B></CODE>.</P><PRE>BINARY-DATA&gt; (slot-&gt;defclass-slot '(major-version u1))
+(MAJOR-VERSION :INITARG :MAJOR-VERSION :ACCESSOR MAJOR-VERSION)</PRE><P>Looks good. Now the first version of <CODE>define-binary-class</CODE> is
+trivial.</P><PRE>(defmacro define-binary-class (name slots)
+  `(defclass ,name ()
+     ,(mapcar #'slot-&gt;defclass-slot slots)))</PRE><P>This is simple template-style macro--<CODE>define-binary-class</CODE>
+generates a <CODE><B>DEFCLASS</B></CODE> form by interpolating the name of the class
+and a list of slot specifiers constructed by applying
+<CODE>slot-&gt;defclass-slot</CODE> to each element of the list of slots
+specifiers from the <CODE>define-binary-class</CODE> form.</P><P>To see exactly what code this macro generates, you can evaluate this
+expression at the REPL.</P><PRE>(macroexpand-1 '(define-binary-class id3-tag
+  ((identifier      (iso-8859-1-string :length 3))
+   (major-version   u1)
+   (revision        u1)
+   (flags           u1)
+   (size            id3-tag-size)
+   (frames          (id3-frames :tag-size size)))))</PRE><P>The result, slightly reformatted here for better readability, should
+look familiar since it's exactly the class definition you wrote by
+hand earlier:</P><PRE>(defclass id3-tag ()
+  ((identifier      :initarg :identifier    :accessor identifier)
+   (major-version   :initarg :major-version :accessor major-version)
+   (revision        :initarg :revision      :accessor revision)
+   (flags           :initarg :flags         :accessor flags)
+   (size            :initarg :size          :accessor size)
+   (frames          :initarg :frames        :accessor frames)))</PRE><A NAME="reading-binary-objects"><H2>Reading Binary Objects</H2></A><P>Next you need to make <CODE>define-binary-class</CODE> also generate a
+function that can read an instance of the new class. Looking back at
+the <CODE>read-id3-tag</CODE> function you wrote before, this seems a bit
+trickier, as the <CODE>read-id3-tag</CODE> wasn't quite so regular--to read
+each slot's value, you had to call a different function. Not to
+mention, the name of the function, <CODE>read-id3-tag</CODE>, while derived
+from the name of the class you're defining, isn't one of the
+arguments to <CODE>define-binary-class</CODE> and thus isn't available to
+be interpolated into a template the way the class name was.</P><P>You could deal with both of those problems by devising and following a
+naming convention so the macro can figure out the name of the function
+to call based on the name of the type in the slot specifier. However,
+this would require <CODE>define-binary-class</CODE> to generate the name
+<CODE>read-id3-tag</CODE>, which is possible but a bad idea. Macros that
+create global definitions should generally use only names passed to
+them by their callers; macros that generate names under the covers can
+cause hard-to-predict--and hard-to-debug--name conflicts when the
+generated names happen to be the same as names used
+elsewhere.<SUP>8</SUP></P><P>You can avoid both these inconveniences by noticing that all the
+functions that read a particular type of value have the same
+fundamental purpose, to read a value of a specific type from a
+stream. Speaking colloquially, you might say they're all instances of
+a single generic operation. And the colloquial use of the word
+<I>generic</I> should lead you directly to the solution to your problem:
+instead of defining a bunch of independent functions, all with
+different names, you can define a single generic function,
+<CODE>read-value</CODE>, with methods specialized to read different types
+of values.</P><P>That is, instead of defining functions <CODE>read-iso-8859-1-string</CODE>
+and <CODE>read-u1</CODE>, you can define <CODE>read-value</CODE> as a generic
+function taking two required arguments, a type and a stream, and
+possibly some keyword arguments.</P><PRE>(defgeneric read-value (type stream &amp;key)
+  (:documentation &quot;Read a value of the given type from the stream.&quot;))</PRE><P>By specifying <CODE><B>&amp;key</B></CODE> without any actual keyword parameters, you
+allow different methods to define their own <CODE><B>&amp;key</B></CODE> parameters
+without requiring them to do so. This does mean every method
+specialized on <CODE>read-value</CODE> will have to include either
+<CODE><B>&amp;key</B></CODE> or an <CODE><B>&amp;rest</B></CODE> parameter in its parameter list to be
+compatible with the generic function.</P><P>Then you'll define methods that use <CODE><B>EQL</B></CODE> specializers to
+specialize the type argument on the name of the type you want to
+read.</P><PRE>(defmethod read-value ((type (eql 'iso-8859-1-string)) in &amp;key length) ...)
+
+(defmethod read-value ((type (eql 'u1)) in &amp;key) ...)</PRE><P>Then you can make <CODE>define-binary-class</CODE> generate a
+<CODE>read-value</CODE> method specialized on the type name <CODE>id3-tag</CODE>,
+and that method can be implemented in terms of calls to
+<CODE>read-value</CODE> with the appropriate slot types as the first
+argument. The code you want to generate is going to look like this:</P><PRE>(defmethod read-value ((type (eql 'id3-tag)) in &amp;key)
+  (let ((object (make-instance 'id3-tag)))
+    (with-slots (identifier major-version revision flags size frames) object
+      (setf identifier    (read-value 'iso-8859-1-string in :length 3))
+      (setf major-version (read-value 'u1 in))
+      (setf revision      (read-value 'u1 in))
+      (setf flags         (read-value 'u1 in))
+      (setf size          (read-value 'id3-encoded-size in))
+      (setf frames        (read-value 'id3-frames in :tag-size size)))
+    object))</PRE><P>So, just as you needed a function to translate a
+<CODE>define-binary-class</CODE> slot specifier to a <CODE><B>DEFCLASS</B></CODE> slot
+specifier in order to generate the <CODE><B>DEFCLASS</B></CODE> form, now you need a
+function that takes a <CODE>define-binary-class</CODE> slot specifier and
+generates the appropriate <CODE><B>SETF</B></CODE> form, that is, something that
+takes this:</P><PRE>(identifier (iso-8859-1-string :length 3))</PRE><P>and returns this:</P><PRE>(setf identifier (read-value 'iso-8859-1-string in :length 3))</PRE><P>However, there's a difference between this code and the <CODE><B>DEFCLASS</B></CODE>
+slot specifier: it includes a reference to a variable <CODE>in</CODE>--the
+method parameter from the <CODE>read-value</CODE> method--that wasn't
+derived from the slot specifier. It doesn't have to be called
+<CODE>in</CODE>, but whatever name you use has to be the same as the one
+used in the method's parameter list and in the other calls to
+<CODE>read-value</CODE>. For now you can dodge the issue of where that name
+comes from by defining <CODE>slot-&gt;read-value</CODE> to take a second
+argument of the name of the stream variable.</P><PRE>(defun slot-&gt;read-value (spec stream)
+  (destructuring-bind (name (type &amp;rest args)) (normalize-slot-spec spec)
+    `(setf ,name (read-value ',type ,stream ,@args))))</PRE><P>The function <CODE>normalize-slot-spec</CODE> normalizes the second element
+of the slot specifier, converting a symbol like <CODE>u1</CODE> to the list
+<CODE>(u1)</CODE> so the <CODE><B>DESTRUCTURING-BIND</B></CODE> can parse it. It looks like
+this:</P><PRE>(defun normalize-slot-spec (spec)
+  (list (first spec) (mklist (second spec))))
+
+(defun mklist (x) (if (listp x) x (list x)))</PRE><P>You can test <CODE>slot-&gt;read-value</CODE> with each type of slot
+specifier.</P><PRE>BINARY-DATA&gt; (slot-&gt;read-value '(major-version u1) 'stream)
+(SETF MAJOR-VERSION (READ-VALUE 'U1 STREAM))
+BINARY-DATA&gt; (slot-&gt;read-value '(identifier (iso-8859-1-string :length 3)) 'stream)
+(SETF IDENTIFIER (READ-VALUE 'ISO-8859-1-STRING STREAM :LENGTH 3))</PRE><P>With these functions you're ready to add <CODE>read-value</CODE> to
+<CODE>define-binary-class</CODE>. If you take the handwritten
+<CODE>read-value</CODE> method and strip out anything that's tied to a
+particular class, you're left with this skeleton:</P><PRE>(defmethod read-value ((type (eql ...)) stream &amp;key)
+  (let ((object (make-instance ...)))
+    (with-slots (...) object
+      ...
+    object)))</PRE><P>All you need to do is add this skeleton to the
+<CODE>define-binary-class</CODE> template, replacing ellipses with code
+that fills in the skeleton with the appropriate names and code.
+You'll also want to replace the variables <CODE>type</CODE>, <CODE>stream</CODE>,
+and <CODE>object</CODE> with gensymed names to avoid potential conflicts
+with slot names,<SUP>9</SUP> which you can do with the
+<CODE>with-gensyms</CODE> macro from Chapter 8.</P><P>Also, because a macro must expand into a single form, you need to wrap
+some form around the <CODE><B>DEFCLASS</B></CODE> and <CODE><B>DEFMETHOD</B></CODE>. <CODE><B>PROGN</B></CODE> is
+the customary form to use for macros that expand into multiple
+definitions because of the special treatment it gets from the file
+compiler when appearing at the top level of a file, as I discussed in
+Chapter 20.</P><P>So, you can change <CODE>define-binary-class</CODE> as follows:</P><PRE>(defmacro define-binary-class (name slots)
+  (with-gensyms (typevar objectvar streamvar)
+    `(progn
+       (defclass ,name ()
+         ,(mapcar #'slot-&gt;defclass-slot slots))
+
+       (defmethod read-value ((,typevar (eql ',name)) ,streamvar &amp;key)
+         (let ((,objectvar (make-instance ',name)))
+           (with-slots ,(mapcar #'first slots) ,objectvar
+             ,@(mapcar #'(lambda (x) (slot-&gt;read-value x streamvar)) slots))
+           ,objectvar)))))</PRE><A NAME="writing-binary-objects"><H2>Writing Binary Objects</H2></A><P>Generating code to write out an instance of a binary class will
+proceed similarly. First you can define a <CODE>write-value</CODE> generic
+function.</P><PRE>(defgeneric write-value (type stream value &amp;key)
+  (:documentation &quot;Write a value as the given type to the stream.&quot;))</PRE><P>Then you define a helper function that translates a
+<CODE>define-binary-class</CODE> slot specifier into code that writes out
+the slot using <CODE>write-value</CODE>. As with the
+<CODE>slot-&gt;read-value</CODE> function, this helper function needs to take
+the name of the stream variable as an argument.</P><PRE>(defun slot-&gt;write-value (spec stream)
+  (destructuring-bind (name (type &amp;rest args)) (normalize-slot-spec spec)
+    `(write-value ',type ,stream ,name ,@args)))</PRE><P>Now you can add a <CODE>write-value</CODE> template to the
+<CODE>define-binary-class</CODE> macro.</P><PRE>(defmacro define-binary-class (name slots)
+  (with-gensyms (typevar objectvar streamvar)
+    `(progn
+       (defclass ,name ()
+         ,(mapcar #'slot-&gt;defclass-slot slots))
+
+       (defmethod read-value ((,typevar (eql ',name)) ,streamvar &amp;key)
+         (let ((,objectvar (make-instance ',name)))
+           (with-slots ,(mapcar #'first slots) ,objectvar
+             ,@(mapcar #'(lambda (x) (slot-&gt;read-value x streamvar)) slots))
+           ,objectvar))
+
+       (defmethod write-value ((,typevar (eql ',name)) ,streamvar ,objectvar &amp;key)
+         (with-slots ,(mapcar #'first slots) ,objectvar
+           ,@(mapcar #'(lambda (x) (slot-&gt;write-value x streamvar)) slots))))))</PRE><A NAME="adding-inheritance-and-tagged-structures"><H2>Adding Inheritance and Tagged Structures</H2></A><P>While this version of <CODE>define-binary-class</CODE> will handle
+stand-alone structures, binary file formats often define on-disk
+structures that would be natural to model with subclasses and
+superclasses. So you might want to extend <CODE>define-binary-class</CODE>
+to support inheritance.</P><P>A related technique used in many binary formats is to have several
+on-disk structures whose exact type can be determined only by reading
+some data that indicates how to parse the following bytes. For
+instance, the frames that make up the bulk of an ID3 tag all share a
+common header structure consisting of a string identifier and a
+length. To read a frame, you need to read the identifier and use its
+value to determine what kind of frame you're looking at and thus how
+to parse the body of the frame.</P><P>The current <CODE>define-binary-class</CODE> macro has no way to handle
+this kind of reading--you could use <CODE>define-binary-class</CODE> to
+define a class to represent each kind of frame, but you'd have no way
+to know what type of frame to read without reading at least the
+identifier. And if other code reads the identifier in order to
+determine what type to pass to <CODE>read-value</CODE>, then that will
+break <CODE>read-value</CODE> since it's expecting to read all the data
+that makes up the instance of the class it instantiates.</P><P>You can solve this problem by adding inheritance to
+<CODE>define-binary-class</CODE> and then writing another macro,
+<CODE>define-tagged-binary-class</CODE>, for defining &quot;abstract&quot; classes
+that aren't instantiated directly but that can be specialized on by
+<CODE>read-value</CODE> methods that know how to read enough data to
+determine what kind of class to create.</P><P>The first step to adding inheritance to <CODE>define-binary-class</CODE> is
+to add a parameter to the macro to accept a list of superclasses.</P><PRE>(defmacro define-binary-class (name (&amp;rest superclasses) slots) ...</PRE><P>Then, in the <CODE><B>DEFCLASS</B></CODE> template, interpolate that value instead
+of the empty list.</P><PRE>(defclass ,name ,superclasses
+  ...)</PRE><P>However, there's a bit more to it than that. You also need to change
+the <CODE>read-value</CODE> and <CODE>write-value</CODE> methods so the methods
+generated when defining a superclass can be used by the methods
+generated as part of a subclass to read and write inherited slots.</P><P>The current way <CODE>read-value</CODE> works is particularly problematic
+since it instantiates the object before filling it in--obviously, you
+can't have the method responsible for reading the superclass's fields
+instantiate one object while the subclass's method instantiates and
+fills in a different object.</P><P>You can fix that problem by splitting <CODE>read-value</CODE> into two
+parts--one responsible for instantiating the correct kind of object
+and another responsible for filling slots in an existing object. On
+the writing side it's a bit simpler, but you can use the same
+technique.</P><P>So you'll define two new generic functions, <CODE>read-object</CODE> and
+<CODE>write-object</CODE>, that will both take an existing object and a
+stream. Methods on these generic functions will be responsible for
+reading or writing the slots specific to the class of the object on
+which they're specialized.</P><PRE>(defgeneric read-object (object stream)
+  (:method-combination progn :most-specific-last)
+  (:documentation &quot;Fill in the slots of object from stream.&quot;))
+
+(defgeneric write-object (object stream)
+  (:method-combination progn :most-specific-last)
+  (:documentation &quot;Write out the slots of object to the stream.&quot;))</PRE><P>Defining these generic functions to use the <CODE><B>PROGN</B></CODE> method
+combination with the option <CODE>:most-specific-last</CODE> allows you to
+define methods that specialize <CODE>object</CODE> on each binary class and
+have them deal only with the slots actually defined in that class;
+the <CODE><B>PROGN</B></CODE> method combination will combine all the applicable
+methods so the method specialized on the least specific class in the
+hierarchy runs first, reading or writing the slots defined in that
+class, then the method specialized on next least specific subclass,
+and so on. And since all the heavy lifting for a specific class is
+now going to be done by <CODE>read-object</CODE> and <CODE>write-object</CODE>,
+you don't even need to define specialized <CODE>read-value</CODE> and
+<CODE>write-value</CODE> methods; you can define default methods that
+assume the type argument is the name of a binary class.</P><PRE>(defmethod read-value ((type symbol) stream &amp;key)
+  (let ((object (make-instance type)))
+    (read-object object stream)
+    object))
+
+(defmethod write-value ((type symbol) stream value &amp;key)
+  (assert (typep value type))
+  (write-object value stream))</PRE><P>Note how you can use <CODE><B>MAKE-INSTANCE</B></CODE> as a generic object
+factory--while you normally call <CODE><B>MAKE-INSTANCE</B></CODE> with a quoted
+symbol as the first argument because you normally know exactly what
+class you want to instantiate, you can use any expression that
+evaluates to a class name such as, in this case, the <CODE>type</CODE>
+parameter in the <CODE>read-value</CODE> method.</P><P>The actual changes to <CODE>define-binary-class</CODE> to define methods on
+<CODE>read-object</CODE> and <CODE>write-object</CODE> rather than
+<CODE>read-value</CODE> and <CODE>write-value</CODE> are fairly minor.</P><PRE>(defmacro define-binary-class (name superclasses slots)
+  (with-gensyms (objectvar streamvar)
+    `(progn
+       (defclass ,name ,superclasses
+         ,(mapcar #'slot-&gt;defclass-slot slots))
+
+       (defmethod read-object progn ((,objectvar ,name) ,streamvar)
+         (with-slots ,(mapcar #'first slots) ,objectvar
+           ,@(mapcar #'(lambda (x) (slot-&gt;read-value x streamvar)) slots)))
+
+       (defmethod write-object progn ((,objectvar ,name) ,streamvar)
+         (with-slots ,(mapcar #'first slots) ,objectvar
+           ,@(mapcar #'(lambda (x) (slot-&gt;write-value x streamvar)) slots))))))</PRE><A NAME="keeping-track-of-inherited-slots"><H2>Keeping Track of Inherited Slots</H2></A><P>This definition will work for many purposes. However, it doesn't
+handle one fairly common situation, namely, when you have a subclass
+that needs to refer to inherited slots in its own slot
+specifications. For instance, with the current definition of
+<CODE>define-binary-class</CODE>, you can define a single class like this:</P><PRE>(define-binary-class generic-frame ()
+  ((id (iso-8859-1-string :length 3))
+   (size u3)
+   (data (raw-bytes :bytes size))))</PRE><P>The reference to <CODE>size</CODE> in the specification of <CODE>data</CODE>
+works the way you'd expect because the expressions that read and
+write the <CODE>data</CODE> slot are wrapped in a <CODE><B>WITH-SLOTS</B></CODE> that
+lists all the object's slots. However, if you try to split that class
+into two classes like this:</P><PRE>(define-binary-class frame ()
+  ((id (iso-8859-1-string :length 3))
+   (size u3)))
+
+(define-binary-class generic-frame (frame)
+  ((data (raw-bytes :bytes size))))</PRE><P>you'll get a compile-time warning when you compile the
+<CODE>generic-frame</CODE> definition and a runtime error when you try to
+use it because there will be no lexically apparent variable
+<CODE>size</CODE> in the <CODE>read-object</CODE> and <CODE>write-object</CODE> methods
+specialized on <CODE>generic-frame</CODE>.</P><P>What you need to do is keep track of the slots defined by each binary
+class and then include inherited slots in the <CODE><B>WITH-SLOTS</B></CODE> forms
+in the <CODE>read-object</CODE> and <CODE>write-object</CODE> methods.</P><P>The easiest way to keep track of information like this is to hang it
+off the symbol that names the class. As I discussed in Chapter 21,
+every symbol object has an associated property list, which can be
+accessed via the functions <CODE><B>SYMBOL-PLIST</B></CODE> and <CODE><B>GET</B></CODE>. You can
+associate arbitrary key/value pairs with a symbol by adding them to
+its property list with <CODE><B>SETF</B></CODE> of <CODE><B>GET</B></CODE>. For instance, if the
+binary class <CODE>foo</CODE> defines three slots--<CODE>x</CODE>, <CODE>y</CODE>, and
+<CODE>z</CODE>--you can keep track of that fact by adding a <CODE>slots</CODE>
+key to the symbol <CODE>foo</CODE>'s property list with the value <CODE>(x
+y z)</CODE> with this expression:</P><PRE>(setf (get 'foo 'slots) '(x y z))</PRE><P>You want this bookkeeping to happen as part of evaluating the
+<CODE>define-binary-class</CODE> of <CODE>foo</CODE>. However, it's not clear
+where to put the expression. If you evaluate it when you compute the
+macro's expansion, it'll get evaluated when you compile the
+<CODE>define-binary-class</CODE> form but not if you later load a file that
+contains the resulting compiled code. On the other hand, if you
+include the expression in the expansion, then it <I>won't</I> be
+evaluated during compilation, which means if you compile a file with
+several <CODE>define-binary-class</CODE> forms, none of the information
+about what classes define what slots will be available until the
+whole file is loaded, which is too late.</P><P>This is what the special operator <CODE><B>EVAL-WHEN</B></CODE> I discussed in
+Chapter 20 is for. By wrapping a form in an <CODE><B>EVAL-WHEN</B></CODE>, you can
+control whether it's evaluated at compile time, when the compiled
+code is loaded, or both. For cases like this where you want to
+squirrel away some information during the compilation of a macro form
+that you also want to be available after the compiled form is loaded,
+you should wrap it in an <CODE><B>EVAL-WHEN</B></CODE> like this:</P><PRE>(eval-when (:compile-toplevel :load-toplevel :execute)
+  (setf (get 'foo 'slots) '(x y z)))</PRE><P>and include the <CODE><B>EVAL-WHEN</B></CODE> in the expansion generated by the
+macro. Thus, you can save both the slots and the direct superclasses
+of a binary class by adding this form to the expansion generated by
+<CODE>define-binary-class</CODE>:</P><PRE>(eval-when (:compile-toplevel :load-toplevel :execute)
+  (setf (get ',name 'slots) ',(mapcar #'first slots))
+  (setf (get ',name 'superclasses) ',superclasses))</PRE><P>Now you can define three helper functions for accessing this
+information. The first simply returns the slots directly defined by a
+binary class. It's a good idea to return a copy of the list since you
+don't want other code to modify the list of slots after the binary
+class has been defined.</P><PRE>(defun direct-slots (name)
+  (copy-list (get name 'slots)))</PRE><P>The next function returns the slots inherited from other binary
+classes.</P><PRE>(defun inherited-slots (name)
+  (loop for super in (get name 'superclasses)
+        nconc (direct-slots super)
+        nconc (inherited-slots super)))</PRE><P>Finally, you can define a function that returns a list containing the
+names of all directly defined and inherited slots.</P><PRE>(defun all-slots (name)
+  (nconc (direct-slots name) (inherited-slots name)))</PRE><P>When you're computing the expansion of a
+<CODE>define-generic-binary-class</CODE> form, you want to generate a
+<CODE><B>WITH-SLOTS</B></CODE> form that contains the names of all the slots defined
+in the new class and all its superclasses. However, you can't use
+<CODE>all-slots</CODE> while you're generating the expansion since the
+information won't be available until after the expansion is compiled.
+Instead, you should use the following function, which takes the list
+of slot specifiers and superclasses passed to
+<CODE>define-generic-binary-class</CODE> and uses them to compute the list
+of all the new class's slots:</P><PRE>(defun new-class-all-slots (slots superclasses)
+  (nconc (mapcan #'all-slots superclasses) (mapcar #'first slots)))</PRE><P>With these functions defined, you can change
+<CODE>define-binary-class</CODE> to store the information about the class
+currently being defined and to use the already stored information
+about the superclasses' slots to generate the <CODE><B>WITH-SLOTS</B></CODE> forms
+you want like this:</P><PRE>(defmacro define-binary-class (name (&amp;rest superclasses) slots)
+  (with-gensyms (objectvar streamvar)
+    `(progn
+       (eval-when (:compile-toplevel :load-toplevel :execute)
+         (setf (get ',name 'slots) ',(mapcar #'first slots))
+         (setf (get ',name 'superclasses) ',superclasses))
+
+       (defclass ,name ,superclasses
+         ,(mapcar #'slot-&gt;defclass-slot slots))
+
+       (defmethod read-object progn ((,objectvar ,name) ,streamvar)
+         (with-slots ,(new-class-all-slots slots superclasses) ,objectvar
+           ,@(mapcar #'(lambda (x) (slot-&gt;read-value x streamvar)) slots)))
+
+       (defmethod write-object progn ((,objectvar ,name) ,streamvar)
+         (with-slots ,(new-class-all-slots slots superclasses) ,objectvar
+           ,@(mapcar #'(lambda (x) (slot-&gt;write-value x streamvar)) slots))))))</PRE><A NAME="tagged-structures"><H2>Tagged Structures</H2></A><P>With the ability to define binary classes that extend other binary
+classes, you're ready to define a new macro for defining classes to
+represent &quot;tagged&quot; structures. The strategy for reading tagged
+structures will be to define a specialized <CODE>read-value</CODE> method
+that knows how to read the values that make up the start of the
+structure and then use those values to determine what subclass to
+instantiate. It'll then make an instance of that class with
+<CODE><B>MAKE-INSTANCE</B></CODE>, passing the already read values as initargs, and
+pass the object to <CODE>read-object</CODE>, allowing the actual class of
+the object to determine how the rest of the structure is read.</P><P>The new macro, <CODE>define-tagged-binary-class</CODE>, will look like
+<CODE>define-binary-class</CODE> with the addition of a <CODE>:dispatch</CODE>
+option used to specify a form that should evaluate to the name of a
+binary class. The <CODE>:dispatch</CODE> form will be evaluated in a context
+where the names of the slots defined by the tagged class are bound to
+variables that hold the values read from the file. The class whose
+name it returns must accept initargs corresponding to the slot names
+defined by the tagged class. This is easily ensured if the
+<CODE>:dispatch</CODE> form always evaluates to the name of a class that
+subclasses the tagged class.</P><P>For instance, supposing you have a function, <CODE>find-frame-class</CODE>,
+that will map a string identifier to a binary class representing a
+particular kind of ID3 frame, you might define a tagged binary class,
+<CODE>id3-frame</CODE>, like this:</P><PRE>(define-tagged-binary-class id3-frame ()
+  ((id   (iso-8859-1-string :length 3))
+   (size u3))
+  (:dispatch (find-frame-class id)))</PRE><P>The expansion of a <CODE>define-tagged-binary-class</CODE> will contain a
+<CODE><B>DEFCLASS</B></CODE> and a <CODE>write-object</CODE> method just like the expansion
+of <CODE>define-binary-class</CODE>, but instead of a <CODE>read-object</CODE>
+method it'll contain a <CODE>read-value</CODE> method that looks like this:</P><PRE>(defmethod read-value ((type (eql 'id3-frame)) stream &amp;key)
+  (let ((id (read-value 'iso-8859-1-string stream :length 3))
+        (size (read-value 'u3 stream)))
+    (let ((object (make-instance (find-frame-class id) :id id :size size)))
+      (read-object object stream)
+      object)))</PRE><P>Since the expansions of <CODE>define-tagged-binary-class</CODE> and
+<CODE>define-binary-class</CODE> are going to be identical except for the
+read method, you can factor out the common bits into a helper macro,
+<CODE>define-generic-binary-class</CODE>, that accepts the read method as a
+parameter and interpolates it.</P><PRE>(defmacro define-generic-binary-class (name (&amp;rest superclasses) slots read-method)
+  (with-gensyms (objectvar streamvar)
+    `(progn
+       (eval-when (:compile-toplevel :load-toplevel :execute)
+         (setf (get ',name 'slots) ',(mapcar #'first slots))
+         (setf (get ',name 'superclasses) ',superclasses))
+
+       (defclass ,name ,superclasses
+         ,(mapcar #'slot-&gt;defclass-slot slots))
+
+       ,read-method
+
+       (defmethod write-object progn ((,objectvar ,name) ,streamvar)
+         (declare (ignorable ,streamvar))
+         (with-slots ,(new-class-all-slots slots superclasses) ,objectvar
+           ,@(mapcar #'(lambda (x) (slot-&gt;write-value x streamvar)) slots))))))</PRE><P>Now you can define both <CODE>define-binary-class</CODE> and
+<CODE>define-tagged-binary-class</CODE> to expand into a call to
+<CODE>define-generic-binary-class</CODE>. Here's a new version of
+<CODE>define-binary-class</CODE> that generates the same code as the earlier
+version when it's fully expanded:</P><PRE>(defmacro define-binary-class (name (&amp;rest superclasses) slots)
+  (with-gensyms (objectvar streamvar)
+    `(define-generic-binary-class ,name ,superclasses ,slots
+       (defmethod read-object progn ((,objectvar ,name) ,streamvar)
+         (declare (ignorable ,streamvar))
+         (with-slots ,(new-class-all-slots slots superclasses) ,objectvar
+           ,@(mapcar #'(lambda (x) (slot-&gt;read-value x streamvar)) slots))))))</PRE><P>And here's <CODE>define-tagged-binary-class</CODE> along with two new
+helper functions it uses:</P><PRE>(defmacro define-tagged-binary-class (name (&amp;rest superclasses) slots &amp;rest options)
+  (with-gensyms (typevar objectvar streamvar)
+    `(define-generic-binary-class ,name ,superclasses ,slots
+      (defmethod read-value ((,typevar (eql ',name)) ,streamvar &amp;key)
+        (let* ,(mapcar #'(lambda (x) (slot-&gt;binding x streamvar)) slots)
+          (let ((,objectvar
+                 (make-instance 
+                  ,@(or (cdr (assoc :dispatch options))
+                        (error &quot;Must supply :dispatch form.&quot;))
+                  ,@(mapcan #'slot-&gt;keyword-arg slots))))
+            (read-object ,objectvar ,streamvar)
+            ,objectvar))))))
+
+(defun slot-&gt;binding (spec stream)
+  (destructuring-bind (name (type &amp;rest args)) (normalize-slot-spec spec)
+    `(,name (read-value ',type ,stream ,@args))))
+
+(defun slot-&gt;keyword-arg (spec)
+  (let ((name (first spec)))
+    `(,(as-keyword name) ,name)))</PRE><A NAME="primitive-binary-types"><H2>Primitive Binary Types</H2></A><P>While <CODE>define-binary-class</CODE> and
+<CODE>define-tagged-binary-class</CODE> make it easy to define composite
+structures, you still have to write <CODE>read-value</CODE> and
+<CODE>write-value</CODE> methods for primitive data types by hand. You
+could decide to live with that, specifying that users of the library
+need to write appropriate methods on <CODE>read-value</CODE> and
+<CODE>write-value</CODE> to support the primitive types used by their
+binary classes.</P><P>However, rather than having to document how to write a suitable
+<CODE>read-value</CODE>/<CODE>write-value</CODE> pair, you can provide a macro to
+do it automatically. This also has the advantage of making the
+abstraction created by <CODE>define-binary-class</CODE> less leaky.
+Currently, <CODE>define-binary-class</CODE> depends on having methods on
+<CODE>read-value</CODE> and <CODE>write-value</CODE> defined in a particular way,
+but that's really just an implementation detail. By defining a macro
+that generates the <CODE>read-value</CODE> and <CODE>write-value</CODE> methods
+for primitive types, you hide those details behind an abstraction you
+control. If you decide later to change the implementation of
+<CODE>define-binary-class</CODE>, you can change your
+primitive-type-defining macro to meet the new requirements without
+requiring any changes to code that uses the binary data library.</P><P>So you should define one last macro, <CODE>define-binary-type</CODE>, that
+will generate <CODE>read-value</CODE> and <CODE>write-value</CODE> methods for
+reading values represented by instances of existing classes, rather
+than by classes defined with <CODE>define-binary-class</CODE>.</P><P>For a concrete example, consider a type used in the <CODE>id3-tag</CODE>
+class, a fixed-length string encoded in ISO-8859-1 characters. I'll
+assume, as I did earlier, that the native character encoding of your
+Lisp is ISO-8859-1 or a superset, so you can use <CODE><B>CODE-CHAR</B></CODE> and
+<CODE><B>CHAR-CODE</B></CODE> to translate bytes to characters and back.</P><P>As always, your goal is to write a macro that allows you to express
+only the essential information needed to generate the required code.
+In this case, there are four pieces of essential information: the
+name of the type, <CODE>iso-8859-1-string</CODE>; the <CODE><B>&amp;key</B></CODE> parameters
+that should be accepted by the <CODE>read-value</CODE> and
+<CODE>write-value</CODE> methods, <CODE>length</CODE> in this case; the code for
+reading from a stream; and the code for writing to a stream. Here's
+an expression that contains those four pieces of information:</P><PRE>(define-binary-type iso-8859-1-string (length)
+  (:reader (in)
+    (let ((string (make-string length)))
+      (dotimes (i length)
+        (setf (char string i) (code-char (read-byte in))))
+      string))
+  (:writer (out string)
+    (dotimes (i length)
+      (write-byte (char-code (char string i)) out))))</PRE><P>Now you just need a macro that can take apart this form and put it
+back together in the form of two <CODE><B>DEFMETHOD</B></CODE>s wrapped in a
+<CODE><B>PROGN</B></CODE>. If you define the parameter list to
+<CODE>define-binary-type</CODE> like this:</P><PRE> (defmacro define-binary-type (name (&amp;rest args) &amp;body spec) ...</PRE><P>then within the macro the parameter <CODE>spec</CODE> will be a list
+containing the reader and writer definitions. You can then use
+<CODE><B>ASSOC</B></CODE> to extract the elements of <CODE>spec</CODE> using the tags
+<CODE>:reader</CODE> and <CODE>:writer</CODE> and then use
+<CODE><B>DESTRUCTURING-BIND</B></CODE> to take apart the <CODE><B>REST</B></CODE> of each
+element.<SUP>10</SUP></P><P>From there it's just a matter of interpolating the extracted values
+into the backquoted templates of the <CODE>read-value</CODE> and
+<CODE>write-value</CODE> methods.</P><PRE>(defmacro define-binary-type (name (&amp;rest args) &amp;body spec)
+  (with-gensyms (type)
+    `(progn
+      ,(destructuring-bind ((in) &amp;body body) (rest (assoc :reader spec))
+        `(defmethod read-value ((,type (eql ',name)) ,in &amp;key ,@args)
+          ,@body))
+      ,(destructuring-bind ((out value) &amp;body body) (rest (assoc :writer spec))
+        `(defmethod write-value ((,type (eql ',name)) ,out ,value &amp;key ,@args)
+          ,@body)))))</PRE><P>Note how the backquoted templates are nested: the outermost template
+starts with the backquoted <CODE><B>PROGN</B></CODE> form. That template consists of
+the symbol <CODE><B>PROGN</B></CODE> and two comma-unquoted <CODE><B>DESTRUCTURING-BIND</B></CODE>
+expressions. Thus, the outer template is filled in by evaluating the
+<CODE><B>DESTRUCTURING-BIND</B></CODE> expressions and interpolating their values.
+Each <CODE><B>DESTRUCTURING-BIND</B></CODE> expression in turn contains another
+backquoted template, which is used to generate one of the method
+definitions to be interpolated in the outer template.</P><P>With this macro defined, the <CODE>define-binary-type</CODE> form given
+previously expands to this code:</P><PRE>(progn
+  (defmethod read-value ((#:g1618 (eql 'iso-8859-1-string)) in &amp;key length)
+    (let ((string (make-string length)))
+      (dotimes (i length)
+        (setf (char string i) (code-char (read-byte in))))
+      string))
+  (defmethod write-value ((#:g1618 (eql 'iso-8859-1-string)) out string &amp;key length)
+    (dotimes (i length)
+      (write-byte (char-code (char string i)) out))))</PRE><P>Of course, now that you've got this nice macro for defining binary
+types, it's tempting to make it do a bit more work. For now you
+should just make one small enhancement that will turn out to be
+pretty handy when you start using this library to deal with actual
+formats such as ID3 tags.</P><P>ID3 tags, like many other binary formats, use lots of primitive types
+that are minor variations on a theme, such as unsigned integers in
+one-, two-, three-, and four-byte varieties. You could certainly
+define each of those types with <CODE>define-binary-type</CODE> as it
+stands. Or you could factor out the common algorithm for reading and
+writing <I>n</I>-byte unsigned integers into helper functions.</P><P>But suppose you had already defined a binary type,
+<CODE>unsigned-integer</CODE>, that accepts a <CODE>:bytes</CODE> parameter to
+specify how many bytes to read and write. Using that type, you could
+specify a slot representing a one-byte unsigned integer with a type
+specifier of <CODE>(unsigned-integer :bytes 1)</CODE>. But if a particular
+binary format specifies lots of slots of that type, it'd be nice to
+be able to easily define a new type--say, <CODE>u1</CODE>--that means the
+same thing. As it turns out, it's easy to change
+<CODE>define-binary-type</CODE> to support two forms, a long form
+consisting of a <CODE>:reader</CODE> and <CODE>:writer</CODE> pair and a short
+form that defines a new binary type in terms of an existing type.
+Using a short form <CODE>define-binary-type</CODE>, you can define
+<CODE>u1</CODE> like this:</P><PRE>(define-binary-type u1 () (unsigned-integer :bytes 1))</PRE><P>which will expand to this:</P><PRE>(progn
+  (defmethod read-value ((#:g161887 (eql 'u1)) #:g161888 &amp;key)
+    (read-value 'unsigned-integer #:g161888 :bytes 1))
+  (defmethod write-value ((#:g161887 (eql 'u1)) #:g161888 #:g161889 &amp;key)
+    (write-value 'unsigned-integer #:g161888 #:g161889 :bytes 1)))</PRE><P>To support both long- and short-form <CODE>define-binary-type</CODE> calls,
+you need to differentiate based on the value of the <CODE>spec</CODE>
+argument. If <CODE>spec</CODE> is two items long, it represents a long-form
+call, and the two items should be the <CODE>:reader</CODE> and
+<CODE>:writer</CODE> specifications, which you extract as before. On the
+other hand, if it's only one item long, the one item should be a type
+specifier, which needs to be parsed differently. You can use
+<CODE><B>ECASE</B></CODE> to switch on the <CODE><B>LENGTH</B></CODE> of <CODE>spec</CODE> and then parse
+<CODE>spec</CODE> and generate an appropriate expansion for either the long
+form or the short form.</P><PRE>(defmacro define-binary-type (name (&amp;rest args) &amp;body spec)
+  (ecase (length spec)
+    (1
+     (with-gensyms (type stream value)
+       (destructuring-bind (derived-from &amp;rest derived-args) (mklist (first spec))
+         `(progn
+            (defmethod read-value ((,type (eql ',name)) ,stream &amp;key ,@args)
+              (read-value ',derived-from ,stream ,@derived-args))
+            (defmethod write-value ((,type (eql ',name)) ,stream ,value &amp;key ,@args)
+              (write-value ',derived-from ,stream ,value ,@derived-args))))))
+    (2
+     (with-gensyms (type)
+       `(progn
+          ,(destructuring-bind ((in) &amp;body body) (rest (assoc :reader spec))
+             `(defmethod read-value ((,type (eql ',name)) ,in &amp;key ,@args)
+                ,@body))
+          ,(destructuring-bind ((out value) &amp;body body) (rest (assoc :writer spec))
+             `(defmethod write-value ((,type (eql ',name)) ,out ,value &amp;key ,@args)
+                ,@body)))))))</PRE><A NAME="the-current-object-stack"><H2>The Current Object Stack</H2></A><P>One last bit of functionality you'll need in the next chapter is a
+way to get at the binary object being read or written while reading
+and writing. More generally, when reading or writing nested composite
+objects, it's useful to be able to get at any of the objects
+currently being read or written. Thanks to dynamic variables and
+<CODE>:around</CODE> methods, you can add this enhancement with about a
+dozen lines of code. To start, you should define a dynamic variable
+that will hold a stack of objects currently being read or written.</P><PRE>(defvar *in-progress-objects* nil)</PRE><P>Then you can define <CODE>:around</CODE> methods on <CODE>read-object</CODE> and
+<CODE>write-object</CODE> that push the object being read or written onto
+this variable before invoking <CODE><B>CALL-NEXT-METHOD</B></CODE>.</P><PRE>(defmethod read-object :around (object stream)
+  (declare (ignore stream))
+  (let ((*in-progress-objects* (cons object *in-progress-objects*)))
+    (call-next-method)))
+
+(defmethod write-object :around (object stream)
+  (declare (ignore stream))
+  (let ((*in-progress-objects* (cons object *in-progress-objects*)))
+    (call-next-method)))</PRE><P>Note how you rebind <CODE>*in-progress-objects*</CODE> to a list with a new
+item on the front rather than assigning it a new value. This way, at
+the end of the <CODE><B>LET</B></CODE>, after <CODE><B>CALL-NEXT-METHOD</B></CODE> returns, the old
+value of <CODE>*in-progress-objects*</CODE> will be restored, effectively
+popping the object of the stack.</P><P>With those two methods defined, you can provide two convenience
+functions for getting at specific objects in the in-progress stack.
+The function <CODE>current-binary-object</CODE> will return the head of the
+stack, the object whose <CODE>read-object</CODE> or <CODE>write-object</CODE>
+method was invoked most recently. The other, <CODE>parent-of-type</CODE>,
+takes an argument that should be the name of a binary object class
+and returns the most recently pushed object of that type, using the
+<CODE><B>TYPEP</B></CODE> function that tests whether a given object is an instance
+of a particular type.</P><PRE>(defun current-binary-object () (first *in-progress-objects*))
+
+(defun parent-of-type (type)
+  (find-if #'(lambda (x) (typep x type)) *in-progress-objects*))</PRE><P>These two functions can be used in any code that will be called
+within the dynamic extent of a <CODE>read-object</CODE> or
+<CODE>write-object</CODE> call. You'll see one example of how
+<CODE>current-binary-object</CODE> can be used in the next
+chapter.<SUP>11</SUP></P><P>Now you have all the tools you need to tackle an ID3 parsing library,
+so you're ready to move onto the next chapter where you'll do just
+that.
+</P><HR/><DIV CLASS="notes"><P><SUP>1</SUP>In
+ASCII, the first 32 characters are nonprinting <I>control characters</I>
+originally used to control the behavior of a Teletype machine,
+causing it to do such things as sound the bell, back up one
+character, move to a new line, and move the carriage to the beginning
+of the line. Of these 32 control characters, only three, the newline,
+carriage return, and horizontal tab, are typically found in text
+files.</P><P><SUP>2</SUP>Some
+binary file formats <I>are</I> in-memory data structures--on many
+operating systems it's possible to map a file into memory, and
+low-level languages such as C can then treat the region of memory
+containing the contents of the file just like any other memory; data
+written to that area of memory is saved to the underlying file when
+it's unmapped. However, these formats are platform-dependent since
+the in-memory representation of even such simple data types as
+integers depends on the hardware on which the program is running.
+Thus, any file format that's intended to be portable must define a
+canonical representation for all the data types it uses that can be
+mapped to the actual in-memory data representation on a particular
+kind of machine or in a particular language.</P><P><SUP>3</SUP>The term <I>big-endian</I> and its opposite,
+<I>little-endian</I>, borrowed from Jonathan Swift's <I>Gulliver's
+Travels</I>, refer to the way a multibyte number is represented in an
+ordered sequence of bytes such as in memory or in a file. For
+instance, the number 43981, or <CODE>abcd</CODE> in hex, represented as a
+16-bit quantity, consists of two bytes, <CODE>ab</CODE> and <CODE>cd</CODE>. It
+doesn't matter to a computer in what order these two bytes are stored
+as long as everybody agrees. Of course, whenever there's an arbitrary
+choice to be made between two equally good options, the one thing you
+can be sure of is that everybody is not going to agree. For more than
+you ever wanted to know about it, and to see where the terms
+<I>big-endian</I> and <I>little-endian</I> were first applied in this
+fashion, read &quot;On Holy Wars and a Plea for Peace&quot; by Danny Cohen,
+available at
+<CODE>http://khavrinen.lcs.mit.edu/wollman/ien-137.txt</CODE>.</P><P><SUP>4</SUP><CODE><B>LDB</B></CODE> and <CODE><B>DPB</B></CODE>, a
+related function, were named after the DEC PDP-10 assembly functions
+that did essentially the same thing. Both functions operate on
+integers as if they were represented using twos-complement format,
+regardless of the internal representation used by a particular Common
+Lisp implementation.</P><P><SUP>5</SUP>Common Lisp
+also provides functions for shifting and masking the bits of integers
+in a way that may be more familiar to C and Java programmers. For
+instance, you could write <CODE>read-u2</CODE> yet a third way, using those
+functions, like this:</P><PRE>(defun read-u2 (in)
+  (logior (ash (read-byte in) 8) (read-byte in)))</PRE><P>which would be roughly equivalent to this Java method:</P><PRE>public int readU2 (InputStream in) throws IOException {
+  return (in.read() &lt;&lt; 8) | (in.read());
+}</PRE><P>The names <CODE><B>LOGIOR</B></CODE> and <CODE><B>ASH</B></CODE> are short for <I>LOGical Inclusive
+OR</I> and <I>Arithmetic SHift</I>. <CODE><B>ASH</B></CODE> shifts an integer a given
+number of bits to the left when its second argument is positive or to
+the right if the second argument is negative. <CODE><B>LOGIOR</B></CODE> combines
+integers by logically <I>or</I>ing each bit. Another function,
+<CODE><B>LOGAND</B></CODE>, performs a bitwise <I>and</I>, which can be used to mask off
+certain bits. However, for the kinds of bit twiddling you'll need to
+do in this chapter and the next, <CODE><B>LDB</B></CODE> and <CODE><B>BYTE</B></CODE> will be both
+more convenient and more idiomatic Common Lisp style.</P><P><SUP>6</SUP>Originally, UTF-8 was designed to
+represent a 31-bit character code and used up to six bytes per code
+point. However, the maximum Unicode code point is <CODE>#x10ffff</CODE>, so
+a UTF-8 encoding of Unicode requires at most four bytes per code
+point.</P><P><SUP>7</SUP>If you need to parse a file format that
+uses other character codes, or if you need to parse files containing
+arbitrary Unicode strings using a non-Unicode-Common-Lisp
+implementation, you can always represent such strings in memory as
+vectors of integer code points. They won't be Lisp strings, so you
+won't be able to manipulate or compare them with the string
+functions, but you'll still be able to do anything with them that you
+can with arbitrary vectors.</P><P><SUP>8</SUP>Unfortunately, the language itself doesn't always
+provide a good model in this respect: the macro <CODE><B>DEFSTRUCT</B></CODE>, which
+I don't discuss since it has largely been superseded by <CODE><B>DEFCLASS</B></CODE>,
+generates functions with names that it generates based on the name of
+the structure it's given. <CODE><B>DEFSTRUCT</B></CODE>'s bad example leads many new
+macro writers astray.</P><P><SUP>9</SUP>Technically there's no possibility of
+<CODE>type</CODE> or <CODE>object</CODE> conflicting with slot names--at worst
+they'd be shadowed within the <CODE><B>WITH-SLOTS</B></CODE> form. But it doesn't
+hurt anything to simply <CODE><B>GENSYM</B></CODE> all local variable names used
+within a macro template.</P><P><SUP>10</SUP>Using <CODE><B>ASSOC</B></CODE> to extract the <CODE>:reader</CODE> and
+<CODE>:writer</CODE> elements of <CODE>spec</CODE> allows users of
+<CODE>define-binary-type</CODE> to include the elements in either order; if
+you required the <CODE>:reader</CODE> element to be always be first, you
+could then have used <CODE>(rest (first spec))</CODE> to extract the reader
+and <CODE>(rest (second spec))</CODE> to extract the writer. However, as
+long as you require the <CODE>:reader</CODE> and <CODE>:writer</CODE> keywords to
+improve the readability of <CODE>define-binary-type</CODE> forms, you might
+as well use them to extract the correct data.</P><P><SUP>11</SUP>The ID3 format doesn't require the
+<CODE>parent-of-type</CODE> function since it's a relatively flat
+structure. This function comes into its own when you need to parse a
+format made up of many deeply nested structures whose parsing depends
+on information stored in higher-level structures. For example, in the
+Java class file format, the top-level class file structure contains a
+<I>constant pool</I> that maps numeric values used in other
+substructures within the class file to constant values that are
+needed while parsing those substructures. If you were writing a class
+file parser, you could use <CODE>parent-of-type</CODE> in the code that
+reads and writes those substructures to get at the top-level class
+file object and from there to the constant pool.</P></DIV></BODY></HTML>

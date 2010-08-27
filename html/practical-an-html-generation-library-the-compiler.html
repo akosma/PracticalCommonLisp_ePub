@@ -1,0 +1,687 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.01//EN">
+<html>
+    <head>
+        <title>
+            Practical: An HTML Generation Library, the Compiler
+        </title>
+        <link rel="stylesheet" type="text/css" href="style.css">
+    </head>
+    <body>
+        <h1>
+            31. Practical: An HTML Generation Library, the Compiler
+        </h1>
+        <p>
+            Now you're ready to look at how the FOO compiler works. The main difference between a compiler and an interpreter is that an interpreter processes a program and directly generates some behavior--generating HTML in the case of a FOO interpreter--but a compiler processes the same program and generates code in some other language that will exhibit the same behavior. In FOO, the compiler is a Common Lisp macro that translates FOO into Common Lisp so it can be embedded in a Common Lisp program. Compilers, in general, have the advantage over interpreters that, because compilation happens in advance, they can spend a bit of time optimizing the code they generate to make it more efficient. The FOO compiler does that, merging literal text as much as possible in order to emit the same HTML with a smaller number of writes than the interpreter uses. When the compiler is a Common Lisp macro, you also have the advantage that it's easy for the language understood by the compiler to contain embedded Common Lisp--the compiler just has to recognize it and embed it in the right place in the generated code. The FOO compiler will take advantage of this capability.
+        </p>
+        <h2>
+            <a name="the-compiler" id="the-compiler">The Compiler</a>
+        </h2>
+        <p>
+            The basic architecture of the compiler consists of three layers. First you'll implement a class <code>html-compiler</code> that has one slot that holds an adjustable vector that's used to accumulate <i>ops</i> representing the calls made to the generic functions in the backend interface during the execution of <code>process</code>.
+        </p>
+        <p>
+            You'll then implement methods on the generic functions in the backend interface that will store the sequence of actions in the vector. Each op is represented by a list consisting of a keyword naming the operation and the arguments passed to the function that generated the op. The function <code>sexp-&gt;ops</code> implements the first phase of the compiler, compiling a list of FOO forms by calling <code>process</code> on each form with an instance of <code>html-compiler</code>.
+        </p>
+        <p>
+            This vector of ops stored by the compiler is then passed to a function that optimizes it, merging consecutive <code>raw-string</code> ops into a single op that emits the combined string in one go. The optimization function can also, optionally, strip out ops that are needed only for pretty printing, which is mostly important because it allows you to merge more <code>raw-string</code> ops.
+        </p>
+        <p>
+            Finally, the optimized ops vector is passed to a third function, <code>generate-code</code>, that returns a list of Common Lisp expressions that will actually output the HTML. When <code>*pretty*</code> is true, <code>generate-code</code> generates code that uses the methods specialized on <code>html-pretty-printer</code> to output pretty HTML. When <code>*pretty*</code> is <code><b>NIL</b></code>, it generates code that writes directly to the stream <code>*html-output*</code>.
+        </p>
+        <p>
+            The macro <code>html</code> actually generates a body that contains two expansions, one generated with <code>*pretty*</code> bound to <code><b>T</b></code> and one with <code>*pretty*</code> bound to <code><b>NIL</b></code>. Which expansion is used is determined by the runtime value of <code>*pretty*</code>. Thus, every function that contains a call to <code>html</code> will contain code to generate both pretty and compact output.
+        </p>
+        <p>
+            The other significant difference between the compiler and the interpreter is that the compiler can embed Lisp forms in the code it generates. To take advantage of that, you need to modify the <code>process</code> function so it calls the <code>embed-code</code> and <code>embed-value</code> functions when asked to process an expression that's not a FOO form. Since all self-evaluating objects are valid FOO forms, the only forms that won't be passed to <code>process-sexp-html</code> are lists that don't match the syntax for FOO cons forms and non-keyword symbols, the only atoms that aren't self-evaluating. You can assume that any non-FOO cons is code to be run inline and all symbols are variables whose value you should embed.
+        </p>
+        <pre>
+(defun process (processor form)
+  (cond
+    ((sexp-html-p form) (process-sexp-html processor form))
+    ((consp form)       (embed-code processor form))
+    (t                  (embed-value processor form))))
+</pre>
+        <p>
+            Now let's look at the compiler code. First you should define two functions that slightly abstract the vector you'll use to save ops in the first two phases of compilation.
+        </p>
+        <pre>
+(defun make-op-buffer () (make-array 10 :adjustable t :fill-pointer 0))
+
+(defun push-op (op ops-buffer) (vector-push-extend op ops-buffer))
+</pre>
+        <p>
+            Next you can define the <code>html-compiler</code> class and the methods specialized on it to implement the backend interface.
+        </p>
+        <pre>
+(defclass html-compiler ()
+  ((ops :accessor ops :initform (make-op-buffer))))
+
+(defmethod raw-string ((compiler html-compiler) string &amp;optional newlines-p)
+  (push-op `(:raw-string ,string ,newlines-p) (ops compiler)))
+
+(defmethod newline ((compiler html-compiler))
+  (push-op '(:newline) (ops compiler)))
+
+(defmethod freshline ((compiler html-compiler))
+  (push-op '(:freshline) (ops compiler)))
+
+(defmethod indent ((compiler html-compiler))
+  (push-op `(:indent) (ops compiler)))
+
+(defmethod unindent ((compiler html-compiler))
+  (push-op `(:unindent) (ops compiler)))
+
+(defmethod toggle-indenting ((compiler html-compiler))
+  (push-op `(:toggle-indenting) (ops compiler)))
+
+(defmethod embed-value ((compiler html-compiler) value)
+  (push-op `(:embed-value ,value ,*escapes*) (ops compiler)))
+
+(defmethod embed-code ((compiler html-compiler) code)
+  (push-op `(:embed-code ,code) (ops compiler)))
+</pre>
+        <p>
+            With those methods defined, you can implement the first phase of the compiler, <code>sexp-&gt;ops</code>.
+        </p>
+        <pre>
+(defun sexp-&gt;ops (body)
+  (loop with compiler = (make-instance 'html-compiler)
+     for form in body do (process compiler form)
+     finally (return (ops compiler))))
+</pre>
+        <p>
+            During this phase you don't need to worry about the value of <code>*pretty*</code>: just record all the functions called by <code>process</code>. Here's what <code>sexp-&gt;ops</code> makes of a simple FOO form:
+        </p>
+        <pre>
+HTML&gt; (sexp-&gt;ops '((:p "Foo")))
+#((:FRESHLINE) (:RAW-STRING "&lt;p" NIL) (:RAW-STRING "&gt;" NIL)
+  (:RAW-STRING "Foo" T) (:RAW-STRING "&lt;/p&gt;" NIL) (:FRESHLINE))
+</pre>
+        <p>
+            The next phase, <code>optimize-static-output</code>, takes a vector of ops and returns a new vector containing the optimized version. The algorithm is simple--for each <code>:raw-string</code> op, it writes the string to a temporary string buffer. Thus, consecutive <code>:raw-string</code> ops will build up a single string containing the concatenation of the strings that need to be emitted. Whenever you encounter an op other than a <code>:raw-string</code> op, you convert the built-up string into a sequence of alternating <code>:raw-string</code> and <code>:newline</code> ops with the helper function <code>compile-buffer</code> and then add the next op. This function is also where you strip out the pretty printing ops if <code>*pretty*</code> is <code><b>NIL</b></code>.
+        </p>
+        <pre>
+(defun optimize-static-output (ops)
+  (let ((new-ops (make-op-buffer)))
+    (with-output-to-string (buf)
+      (flet ((add-op (op) 
+               (compile-buffer buf new-ops)
+               (push-op op new-ops)))
+        (loop for op across ops do
+             (ecase (first op)
+               (:raw-string (write-sequence (second op) buf))
+               ((:newline :embed-value :embed-code) (add-op op))
+               ((:indent :unindent :freshline :toggle-indenting)
+                (when *pretty* (add-op op)))))
+        (compile-buffer buf new-ops)))
+    new-ops))
+
+(defun compile-buffer (buf ops)
+  (loop with str = (get-output-stream-string buf)
+     for start = 0 then (1+ pos)
+     for pos = (position #\Newline str :start start)
+     when (&lt; start (length str))
+     do (push-op `(:raw-string ,(subseq str start pos) nil) ops)
+     when pos do (push-op '(:newline) ops)
+     while pos))
+</pre>
+        <p>
+            The last step is to translate the ops into the corresponding Common Lisp code. This phase also pays attention to the value of <code>*pretty*</code>. When <code>*pretty*</code> is true, it generates code that invokes the backend generic functions on <code>*html-pretty-printer*</code>, which will be bound to an instance of <code>html-pretty-printer</code>. When <code>*pretty*</code> is <code><b>NIL</b></code>, it generates code that writes directly to <code>*html-output*</code>, the stream to which the pretty printer would send its output.
+        </p>
+        <p>
+            The actual function, <code>generate-code</code>, is trivial.
+        </p>
+        <pre>
+(defun generate-code (ops)
+  (loop for op across ops collect (apply #'op-&gt;code op)))
+</pre>
+        <p>
+            All the work is done by methods on the generic function <code>op-&gt;code</code> specializing the <code>op</code> argument with an <code><b>EQL</b></code> specializer on the name of the op.
+        </p>
+        <pre>
+(defgeneric op-&gt;code (op &amp;rest operands))
+
+(defmethod op-&gt;code ((op (eql :raw-string)) &amp;rest operands)
+  (destructuring-bind (string check-for-newlines) operands
+    (if *pretty*
+      `(raw-string *html-pretty-printer* ,string ,check-for-newlines)
+      `(write-sequence ,string *html-output*))))
+
+(defmethod op-&gt;code ((op (eql :newline)) &amp;rest operands)
+  (if *pretty*
+    `(newline *html-pretty-printer*)
+    `(write-char #\Newline *html-output*)))    
+
+(defmethod op-&gt;code ((op (eql :freshline)) &amp;rest operands)
+  (if *pretty*
+    `(freshline *html-pretty-printer*)
+    (error "Bad op when not pretty-printing: ~a" op)))
+
+(defmethod op-&gt;code ((op (eql :indent)) &amp;rest operands)
+  (if *pretty*
+    `(indent *html-pretty-printer*)
+    (error "Bad op when not pretty-printing: ~a" op)))
+
+(defmethod op-&gt;code ((op (eql :unindent)) &amp;rest operands)
+  (if *pretty*
+    `(unindent *html-pretty-printer*)
+    (error "Bad op when not pretty-printing: ~a" op)))
+
+(defmethod op-&gt;code ((op (eql :toggle-indenting)) &amp;rest operands)
+  (if *pretty*
+    `(toggle-indenting *html-pretty-printer*)
+    (error "Bad op when not pretty-printing: ~a" op)))
+</pre>
+        <p>
+            The two most interesting <code>op-&gt;code</code> methods are the ones that generate code for the <code>:embed-value</code> and <code>:embed-code</code> ops. In the <code>:embed-value</code> method, you can generate slightly different code depending on the value of the <code>escapes</code> operand since if <code>escapes</code> is <code><b>NIL</b></code>, you don't need to generate a call to <code>escape</code>. And when both <code>*pretty*</code> and <code>escapes</code> are <code><b>NIL</b></code>, you can generate code that uses <code><b>PRINC</b></code> to emit the value directly to the stream.
+        </p>
+        <pre>
+(defmethod op-&gt;code ((op (eql :embed-value)) &amp;rest operands)
+  (destructuring-bind (value escapes) operands
+    (if *pretty*
+      (if escapes
+        `(raw-string *html-pretty-printer* (escape (princ-to-string ,value) ,escapes) t)
+        `(raw-string *html-pretty-printer* (princ-to-string ,value) t))
+      (if escapes
+        `(write-sequence (escape (princ-to-string ,value) ,escapes) *html-output*)
+        `(princ ,value *html-output*)))))
+</pre>
+        <p>
+            Thus, something like this:
+        </p>
+        <pre>
+HTML&gt; (let ((x 10)) (html (:p x)))
+&lt;p&gt;10&lt;/p&gt;
+NIL
+</pre>
+        <p>
+            works because <code>html</code> translates <code>(:p x)</code> into something like this:
+        </p>
+        <pre>
+(progn
+  (write-sequence "&lt;p&gt;" *html-output*)
+  (write-sequence (escape (princ-to-string x) "&lt;&gt;&amp;") *html-output*)
+  (write-sequence "&lt;/p&gt;" *html-output*))
+</pre>
+        <p>
+            When that code replaces the call to <code>html</code> in the context of the <code><b>LET</b></code>, you get the following:
+        </p>
+        <pre>
+(let ((x 10))
+  (progn
+    (write-sequence "&lt;p&gt;" *html-output*)
+    (write-sequence (escape (princ-to-string x) "&lt;&gt;&amp;") *html-output*)
+    (write-sequence "&lt;/p&gt;" *html-output*)))
+</pre>
+        <p>
+            and the reference to <code>x</code> in the generated code turns into a reference to the lexical variable from the <code><b>LET</b></code> surrounding the <code>html</code> form.
+        </p>
+        <p>
+            The <code>:embed-code</code> method, on the other hand, is interesting because it's so trivial. Because <code>process</code> passed the form to <code>embed-code</code>, which stashed it in the <code>:embed-code</code> op, all you have to do is pull it out and return it.
+        </p>
+        <pre>
+(defmethod op-&gt;code ((op (eql :embed-code)) &amp;rest operands)
+  (first operands))
+</pre>
+        <p>
+            This allows code like this to work:
+        </p>
+        <pre>
+HTML&gt; (html (:ul (dolist (x '(foo bar baz)) (html (:li x)))))
+&lt;ul&gt;
+  &lt;li&gt;FOO&lt;/li&gt;
+  &lt;li&gt;BAR&lt;/li&gt;
+  &lt;li&gt;BAZ&lt;/li&gt;
+&lt;/ul&gt;
+NIL
+</pre>
+        <p>
+            The outer call to <code>html</code> expands into code that does something like this:
+        </p>
+        <pre>
+(progn
+  (write-sequence "&lt;ul&gt;" *html-output*)
+  (dolist (x '(foo bar baz)) (html (:li x)))
+  (write-sequence "&lt;/ul&gt;" *html-output*))))
+</pre>
+        <p>
+            Then if you expand the call to <code>html</code> in the body of the <code><b>DOLIST</b></code>, you'll get something like this:
+        </p>
+        <pre>
+(progn
+  (write-sequence "&lt;ul&gt;" *html-output*)
+  (dolist (x '(foo bar baz))
+    (progn
+      (write-sequence "&lt;li&gt;" *html-output*)
+      (write-sequence (escape (princ-to-string x) "&lt;&gt;&amp;") *html-output*)
+      (write-sequence "&lt;/li&gt;" *html-output*)))
+  (write-sequence "&lt;/ul&gt;" *html-output*))
+</pre>
+        <p>
+            This code will, in fact, generate the output you saw.
+        </p>
+        <h2>
+            <a name="foo-special-operators" id="foo-special-operators">FOO Special Operators</a>
+        </h2>
+        <p>
+            You could stop there; certainly the FOO language is expressive enough to generate nearly any HTML you'd care to. However, you can add two features to the language, with just a bit more code, that will make it quite a bit more powerful: special operators and macros.
+        </p>
+        <p>
+            Special operators in FOO are analogous to special operators in Common Lisp. Special operators provide ways to express things in the language that can't be expressed in the language supported by the basic evaluation rule. Or, another way to look at it is that special operators provide access to the primitive mechanisms used by the language evaluator.<sup>1</sup>
+        </p>
+        <p>
+            To take a simple example, in the FOO compiler, the language evaluator uses the <code>embed-value</code> function to generate code that will embed the value of a variable in the output HTML. However, because only symbols are passed to <code>embed-value</code>, there's no way, in the language I've described so far, to embed the value of an arbitrary Common Lisp expression; the <code>process</code> function passes cons cells to <code>embed-code</code> rather than <code>embed-value</code>, so the values returned are ignored. Typically this is what you'd want, since the main reason to embed Lisp code in a FOO program is to use Lisp control constructs. However, sometimes you'd like to embed computed values in the generated HTML. For example, you might like this FOO program to generate a paragraph tag containing a random number:
+        </p>
+        <pre>
+(:p (random 10))
+</pre>
+        <p>
+            But that doesn't work because the code is run and its value discarded.
+        </p>
+        <pre>
+HTML&gt; (html (:p (random 10)))
+&lt;p&gt;&lt;/p&gt;
+NIL
+</pre>
+        <p>
+            In the language, as you've implemented it so far, you could work around this limitation by computing the value outside the call to <code>html</code> and then embedding it via a variable.
+        </p>
+        <pre>
+HTML&gt; (let ((x (random 10))) (html (:p x)))
+&lt;p&gt;1&lt;/p&gt;
+NIL
+</pre>
+        <p>
+            But that's sort of annoying, particularly when you consider that if you could arrange for the form <code>(random 10)</code> to be passed to <code>embed-value</code> instead of <code>embed-code</code>, it'd do exactly what you want. So, you can define a special operator, <code>:print</code>, that's processed by the FOO language processor according to a different rule than a normal FOO expression. Namely, instead of generating a <code>&lt;print&gt;</code> element, it passes the form in its body to <code>embed-value</code>. Thus, you can generate a paragraph containing a random number like this:
+        </p>
+        <pre>
+HTML&gt; (html (:p (:print (random 10))))
+&lt;p&gt;9&lt;/p&gt;
+NIL
+</pre>
+        <p>
+            Obviously, this special operator is useful only in compiled FOO code since <code>embed-value</code> doesn't work in the interpreter. Another special operator that can be used in both interpreted and compiled FOO code is <code>:format</code>, which lets you generate output using the <code><b>FORMAT</b></code> function. The arguments to the <code>:format</code> special operator are a string used as a format control string and then any arguments to be interpolated. When all the arguments to <code>:format</code> are self-evaluating objects, a string is generated by passing them to <code><b>FORMAT</b></code>, and that string is then emitted like any other string. This allows such <code>:format</code> forms to be used in FOO passed to <code>emit-html</code>. In compiled FOO, the arguments to <code>:format</code> can be any Lisp expressions.
+        </p>
+        <p>
+            Other special operators provide control over what characters are automatically escaped and to explicitly emit newline characters: the <code>:noescape</code> special operator causes all the forms in its body to be evaluated as regular FOO forms but with <code>*escapes*</code> bound to <code><b>NIL</b></code>, while <code>:attribute</code> evaluates the forms in its body with <code>*escapes*</code> bound to <code>*attribute-escapes*</code>. And <code>:newline</code> is translated into code to emit an explicit newline.
+        </p>
+        <p>
+            So, how do you define special operators? There are two aspects to processing special operators: how does the language processor recognize forms that use special operators, and how does it know what code to run to process each special operator?
+        </p>
+        <p>
+            You could hack <code>process-sexp-html</code> to recognize each special operator and handle it in the appropriate manner--special operators are, logically, part of the implementation of the language, and there aren't going to be that many of them. However, it'd be nice to have a slightly more modular way to add new special operators--not because users of FOO will be able to but just for your own sanity.
+        </p>
+        <p>
+            Define a <i>special form</i> as any list whose <code><b>CAR</b></code> is a symbol that's the name of a special operator. You can mark the names of special operators by adding a non-<code><b>NIL</b></code> value to the symbol's property list under the key <code>html-special-operator</code>. So, you can define a function that tests whether a given form is a special form like this:
+        </p>
+        <pre>
+(defun special-form-p (form)
+  (and (consp form) (symbolp (car form)) (get (car form) 'html-special-operator)))
+</pre>
+        <p>
+            The code that implements each special operator is responsible for taking apart the rest of the list however it sees fit and doing whatever the semantics of the special operator require. Assuming you'll also define a function <code>process-special-form</code>, which will take the language processor and a special form and run the appropriate code to generate a sequence of calls on the processor object, you can augment the top-level <code>process</code> function to handle special forms like this:
+        </p>
+        <pre>
+(defun process (processor form)
+  (cond
+    ((special-form-p form) (process-special-form processor form))
+    ((sexp-html-p form)    (process-sexp-html processor form))
+    ((consp form)          (embed-code processor form))
+    (t                     (embed-value processor form))))
+</pre>
+        <p>
+            You must add the <code>special-form-p</code> clause first because special forms can look, syntactically, like regular FOO expressions just the way Common Lisp's special forms can look like regular function calls.
+        </p>
+        <p>
+            Now you just need to implement <code>process-special-form</code>. Rather than define a single monolithic function that implements all the special operators, you should define a macro that allows you to define special operators much like regular functions and that also takes care of adding the <code>html-special-operator</code> entry to the property list of the special operator's name. In fact, the value you store in the property list can be a function that implements the special operator. Here's the macro:
+        </p>
+        <pre>
+(defmacro define-html-special-operator (name (processor &amp;rest other-parameters) &amp;body body)
+  `(eval-when (:compile-toplevel :load-toplevel :execute)
+     (setf (get ',name 'html-special-operator)
+           (lambda (,processor ,@other-parameters) ,@body))))
+</pre>
+        <p>
+            This is a fairly advanced type of macro, but if you take it one line at a time, there's nothing all that tricky about it. To see how it works, take a simple use of the macro, the definition of the special operator <code>:noescape</code>, and look at the macro expansion. If you write this:
+        </p>
+        <pre>
+(define-html-special-operator :noescape (processor &amp;rest body)
+  (let ((*escapes* nil))
+    (loop for exp in body do (process processor exp))))
+</pre>
+        <p>
+            it's as if you had written this:
+        </p>
+        <pre>
+(eval-when (:compile-toplevel :load-toplevel :execute)
+  (setf (get ':noescape 'html-special-operator)
+        (lambda (processor &amp;rest body)
+          (let ((*escapes* nil))
+            (loop for exp in body do (process processor exp))))))
+</pre>
+        <p>
+            The <code><b>EVAL-WHEN</b></code> special operator, as I discussed in Chapter 20, ensures that the effects of code in its body will be made visible during compilation when you compile with <code><b>COMPILE-FILE</b></code>. This matters if you want to use <code>define-html-special-operator</code> in a file and then use the just-defined special operator in that same file.
+        </p>
+        <p>
+            Then the <code><b>SETF</b></code> expression sets the property <code>html-special-operator</code> on the symbol <code>:noescape</code> to an anonymous function with the same parameter list as was specified in <code>define-html-special-operator</code>. By defining <code>define-html-special-operator</code> to split the parameter list in two parts, <code>processor</code> and everything else, you ensure that all special operators accept at least one argument.
+        </p>
+        <p>
+            The body of the anonymous function is then the body provided to <code>define-html-special-operator</code>. The job of the anonymous function is to implement the special operator by making the appropriate calls on the backend interface to generate the correct HTML or the code that will generate it. It can also use <code>process</code> to evaluate an expression as a FOO form.
+        </p>
+        <p>
+            The <code>:noescape</code> special operator is particularly simple--all it does is pass the forms in its body to <code>process</code> with <code>*escapes*</code> bound to <code><b>NIL</b></code>. In other words, this special operator disables the normal character escaping preformed by <code>process-sexp-html</code>.
+        </p>
+        <p>
+            With special operators defined this way, all <code>process-special-form</code> has to do is look up the anonymous function in the property list of the special operator's name and <code><b>APPLY</b></code> it to the processor and rest of the form.
+        </p>
+        <pre>
+(defun process-special-form (processor form)
+  (apply (get (car form) 'html-special-operator) processor (rest form)))
+</pre>
+        <p>
+            Now you're ready to define the five remaining FOO special operators. Similar to <code>:noescape</code> is <code>:attribute</code>, which evaluates the forms in its body with <code>*escapes*</code> bound to <code>*attribute-escapes*</code>. This special operator is useful if you want to write helper functions that output attribute values. If you write a function like this:
+        </p>
+        <pre>
+(defun foo-value (something)
+  (html (:print (frob something))))
+</pre>
+        <p>
+            the <code>html</code> macro is going to generate code that escapes the characters in <code>*element-escapes*</code>. But if you're planning to use <code>foo-value</code> like this:
+        </p>
+        <pre>
+(html (:p :style (foo-value 42) "Foo"))
+</pre>
+        <p>
+            then you want it to generate code that uses <code>*attribute-escapes*</code>. So, instead, you can write it like this:<sup>2</sup>
+        </p>
+        <pre>
+(defun foo-value (something)
+  (html (:attribute (:print (frob something)))))
+</pre>
+        <p>
+            The definition of <code>:attribute</code> looks like this:
+        </p>
+        <pre>
+(define-html-special-operator :attribute (processor &amp;rest body)
+  (let ((*escapes* *attribute-escapes*))
+    (loop for exp in body do (process processor exp))))
+</pre>
+        <p>
+            The next two special operators, <code>:print</code> and <code>:format</code>, are used to output values. The <code>:print</code> special operator, as I discussed earlier, is used in compiled FOO programs to embed the value of an arbitrary Lisp expression. The <code>:format</code> special operator is more or less equivalent to generating a string with <code>(format nil ...)</code> and then embedding it. The primary reason to define <code>:format</code> as a special operator is for convenience. This:
+        </p>
+        <pre>
+(:format "Foo: ~d" x)
+</pre>
+        <p>
+            is nicer than this:
+        </p>
+        <pre>
+(:print (format nil "Foo: ~d" x))
+</pre>
+        <p>
+            It also has the slight advantage that if you use <code>:format</code> with arguments that are all self-evaluating, FOO can evaluate the <code>:format</code> at compile time rather than waiting until runtime. The definitions of <code>:print</code> and <code>:format</code> are as follows:
+        </p>
+        <pre>
+(define-html-special-operator :print (processor form)
+  (cond
+    ((self-evaluating-p form)
+     (warn "Redundant :print of self-evaluating form ~s" form)
+     (process-sexp-html processor form))
+    (t
+     (embed-value processor form))))
+
+(define-html-special-operator :format (processor &amp;rest args)
+  (if (every #'self-evaluating-p args)
+    (process-sexp-html processor (apply #'format nil args))
+    (embed-value processor `(format nil ,@args))))
+</pre>
+        <p>
+            The <code>:newline</code> special operator forces an output of a literal newline, which is occasionally handy.
+        </p>
+        <pre>
+(define-html-special-operator :newline (processor)
+  (newline processor))
+</pre>
+        <p>
+            Finally, the <code>:progn</code> special operator is analogous to the <code><b>PROGN</b></code> special operator in Common Lisp. It simply processes the forms in its body in sequence.
+        </p>
+        <pre>
+(define-html-special-operator :progn (processor &amp;rest body)
+  (loop for exp in body do (process processor exp)))
+</pre>
+        <p>
+            In other words, the following:
+        </p>
+        <pre>
+(html (:p (:progn "Foo " (:i "bar") " baz")))
+</pre>
+        <p>
+            will generate the same code as this:
+        </p>
+        <pre>
+(html (:p "Foo " (:i "bar") " baz"))
+</pre>
+        <p>
+            This might seem like a strange thing to need since normal FOO expressions can have any number of forms in their body. However, this special operator will come in quite handy in one situation--when writing FOO macros, which brings you to the last language feature you need to implement.
+        </p>
+        <h2>
+            <a name="foo-macros" id="foo-macros">FOO Macros</a>
+        </h2>
+        <p>
+            FOO macros are similar in spirit to Common Lisp's macros. A FOO macro is a bit of code that accepts a FOO expression as an argument and returns a new FOO expression as the result, which is then evaluated according to the normal FOO evaluation rules. The actual implementation is quite similar to the implementation of special operators.
+        </p>
+        <p>
+            As with special operators, you can define a predicate function to test whether a given form is a macro form.
+        </p>
+        <pre>
+(defun macro-form-p (form)
+  (cons-form-p form #'(lambda (x) (and (symbolp x) (get x 'html-macro)))))
+</pre>
+        <p>
+            You use the previously defined function <code>cons-form-p</code> because you want to allow macros to be used in either of the syntaxes of nonmacro FOO cons forms. However, you need to pass a different predicate function, one that tests whether the form name is a symbol with a non-<code><b>NIL</b></code> <code>html-macro</code> property. Also, as in the implementation of special operators, you'll define a macro for defining FOO macros, which is responsible for storing a function in the property list of the macro's name, under the key <code>html-macro</code>. However, defining a macro is a bit more complicated because FOO supports two flavors of macro. Some macros you'll define will behave much like normal HTML elements and may want to have easy access to a list of attributes. Other macros will simply want raw access to the elements of their body.
+        </p>
+        <p>
+            You can make the distinction between the two flavors of macros implicit: when you define a FOO macro, the parameter list can include an <code>&amp;attributes</code> parameter. If it does, the macro form will be parsed like a regular cons form, and the macro function will be passed two values, a plist of attributes and a list of expressions that make up the body of the form. A macro form without an <code>&amp;attributes</code> parameter won't be parsed for attributes, and the macro function will be invoked with a single argument, a list containing the body expressions. The former is useful for what are essentially HTML templates. For example:
+        </p>
+        <pre>
+(define-html-macro :mytag (&amp;attributes attrs &amp;body body)
+  `((:div :class "mytag" ,@attrs) ,@body))
+
+HTML&gt; (html (:mytag "Foo"))
+&lt;div class='mytag'&gt;Foo&lt;/div&gt;
+NIL
+HTML&gt; (html (:mytag :id "bar" "Foo"))
+&lt;div class='mytag' id='bar'&gt;Foo&lt;/div&gt;
+NIL
+HTML&gt; (html ((:mytag :id "bar") "Foo"))
+&lt;div class='mytag' id='bar'&gt;Foo&lt;/div&gt;
+NIL
+</pre>
+        <p>
+            The latter kind of macro is more useful for writing macros that manipulate the forms in their body. This type of macro can function as a kind of HTML control construct. As a trivial example, consider the following macro that implements an <code>:if</code> construct:
+        </p>
+        <pre>
+(define-html-macro :if (test then else)
+  `(if ,test (html ,then) (html ,else)))
+</pre>
+        <p>
+            This macro allows you to write this:
+        </p>
+        <pre>
+(:p (:if (zerop (random 2)) "Heads" "Tails"))
+</pre>
+        <p>
+            instead of this slightly more verbose version:
+        </p>
+        <pre>
+(:p (if (zerop (random 2)) (html "Heads") (html "Tails")))
+</pre>
+        <p>
+            To determine which kind of macro you should generate, you need a function that can parse the parameter list given to <code>define-html-macro</code>. This function returns two values, the name of the <code>&amp;attributes</code> parameter, or <code><b>NIL</b></code> if there was none, and a list containing all the elements of <code>args</code> after removing the <code>&amp;attributes</code> marker and the subsequent list element.<sup>3</sup>
+        </p>
+        <pre>
+(defun parse-html-macro-lambda-list (args)
+  (let ((attr-cons (member '&amp;attributes args)))
+    (values 
+     (cadr attr-cons)
+     (nconc (ldiff args attr-cons) (cddr attr-cons)))))
+
+HTML&gt; (parse-html-macro-lambda-list '(a b c))
+NIL
+(A B C)
+HTML&gt; (parse-html-macro-lambda-list '(&amp;attributes attrs a b c))
+ATTRS
+(A B C)
+HTML&gt; (parse-html-macro-lambda-list '(a b c &amp;attributes attrs))
+ATTRS
+(A B C)
+</pre>
+        <p>
+            The element following <code>&amp;attributes</code> in the parameter list can also be a destructuring parameter list.
+        </p>
+        <pre>
+HTML&gt; (parse-html-macro-lambda-list '(&amp;attributes (&amp;key x y) a b c))
+(&amp;KEY X Y)
+(A B C)
+</pre>
+        <p>
+            Now you're ready to write <code>define-html-macro</code>. Depending on whether there was an <code>&amp;attributes</code> parameter specified, you need to generate one form or the other of HTML macro so the main macro simply determines which kind of HTML macro it's defining and then calls out to a helper function to generate the right kind of code.
+        </p>
+        <pre>
+(defmacro define-html-macro (name (&amp;rest args) &amp;body body)
+  (multiple-value-bind (attribute-var args)
+      (parse-html-macro-lambda-list args)
+    (if attribute-var
+      (generate-macro-with-attributes name attribute-var args body)
+      (generate-macro-no-attributes name args body))))
+</pre>
+        <p>
+            The functions that actually generate the expansion look like this:
+        </p>
+        <pre>
+(defun generate-macro-with-attributes (name attribute-args args body)
+  (with-gensyms (attributes form-body)
+    (if (symbolp attribute-args) (setf attribute-args `(&amp;rest ,attribute-args)))
+    `(eval-when (:compile-toplevel :load-toplevel :execute)
+       (setf (get ',name 'html-macro-wants-attributes) t)
+       (setf (get ',name 'html-macro) 
+             (lambda (,attributes ,form-body)
+               (destructuring-bind (,@attribute-args) ,attributes
+                 (destructuring-bind (,@args) ,form-body
+                   ,@body)))))))
+
+(defun generate-macro-no-attributes (name args body)
+  (with-gensyms (form-body)
+    `(eval-when (:compile-toplevel :load-toplevel :execute)
+       (setf (get ',name 'html-macro-wants-attributes) nil)
+       (setf (get ',name 'html-macro)
+             (lambda (,form-body)
+               (destructuring-bind (,@args) ,form-body ,@body)))))
+</pre>
+        <p>
+            The macro functions you'll define accept either one or two arguments and then use <code><b>DESTRUCTURING-BIND</b></code> to take them apart and bind them to the parameters defined in the call to <code>define-html-macro</code>. In both expansions you need to save the macro function in the name's property list under <code>html-macro</code> and a boolean indicating whether the macro takes an <code>&amp;attributes</code> parameter under the property <code>html-macro-wants-attributes</code>. You use that property in the following function, <code>expand-macro-form</code>, to determine how the macro function should be invoked:
+        </p>
+        <pre>
+(defun expand-macro-form (form)
+  (if (or (consp (first form))
+          (get (first form) 'html-macro-wants-attributes))
+    (multiple-value-bind (tag attributes body) (parse-cons-form form)
+      (funcall (get tag 'html-macro) attributes body))
+    (destructuring-bind (tag &amp;body body) form
+      (funcall (get tag 'html-macro) body))))
+</pre>
+        <p>
+            The last step is to integrate macros by adding a clause to the dispatching <code><b>COND</b></code> in the top-level <code>process</code> function.
+        </p>
+        <pre>
+(defun process (processor form)
+  (cond
+    ((special-form-p form) (process-special-form processor form))
+    ((macro-form-p form)   (process processor (expand-macro-form form)))
+    ((sexp-html-p form)    (process-sexp-html processor form))
+    ((consp form)          (embed-code processor form))
+    (t                     (embed-value processor form))))
+</pre>
+        <p>
+            This is the final version of <code>process</code>.
+        </p>
+        <h2>
+            <a name="the-public-api" id="the-public-api">The Public API</a>
+        </h2>
+        <p>
+            Now, at long last, you're ready to implement the <code>html</code> macro, the main entry point to the FOO compiler. The other parts of FOO's public API are <code>emit-html</code> and <code>with-html-output</code>, which I discussed in the previous chapter, and <code>define-html-macro</code>, which I discussed in the previous section. The <code>define-html-macro</code> macro needs to be part of the public API because FOO's users will want to write their own HTML macros. On the other hand, <code>define-html-special-operator</code> isn't part of the public API because it requires too much knowledge of FOO's internals to define a new special operator. And there should be very little that can't be done using the existing language and special operators.<sup>4</sup>
+        </p>
+        <p>
+            One last element of the public API, before I get to <code>html</code>, is another macro, <code>in-html-style</code>. This macro controls whether FOO generates XHTML or regular HTML by setting the <code>*xhtml*</code> variable. The reason this needs to be a macro is because you'll want to wrap the code that sets <code>*xhtml*</code> in an <code><b>EVAL-WHEN</b></code> so you can set it in a file and have it affect uses of the <code>html</code> macro later in that same file.
+        </p>
+        <pre>
+(defmacro in-html-style (syntax)
+  (eval-when (:compile-toplevel :load-toplevel :execute)
+    (case syntax
+      (:html (setf *xhtml* nil))
+      (:xhtml (setf *xhtml* t)))))
+</pre>
+        <p>
+            Finally let's look at <code>html</code> itself. The only tricky bit about implementing <code>html</code> comes from the need to generate code that can be used to generate both pretty and compact output, depending on the runtime value of the variable <code>*pretty*</code>. Thus, <code>html</code> needs to generate an expansion that contains an <code><b>IF</b></code> expression and two versions of the code, one compiled with <code>*pretty*</code> bound to true and one compiled with it bound to <code><b>NIL</b></code>. To further complicate matters, it's common for one <code>html</code> call to contain embedded calls to <code>html</code>, like this:
+        </p>
+        <pre>
+(html (:ul (dolist (item stuff)) (html (:li item))))
+</pre>
+        <p>
+            If the outer <code>html</code> expands into an <code><b>IF</b></code> expression with two versions of the code, one for when <code>*pretty*</code> is true and one for when it's false, it's silly for nested <code>html</code> forms to expand into two versions too. In fact, it'll lead to an exponential explosion of code since the nested <code>html</code> is already going to be expanded twice--once in the <code>*pretty*</code>-is-true branch and once in the <code>*pretty*</code>-is-false branch. If each expansion generates two versions, then you'll have four total versions. And if the nested <code>html</code> form contained another nested <code>html</code> form, you'd end up with eight versions of that code. If the compiler is smart, it'll eventually realize that most of that generated code is dead and will eliminate it, but even figuring that out can take quite a bit of time, slowing down compilation of any function that uses nested calls to <code>html</code>.
+        </p>
+        <p>
+            Luckily, you can easily avoid this explosion of dead code by generating an expansion that locally redefines the <code>html</code> macro, using <code><b>MACROLET</b></code>, to generate only the right kind of code. First you define a helper function that takes the vector of ops returned by <code>sexp-&gt;ops</code> and runs it through <code>optimize-static-output</code> and <code>generate-code</code>--the two phases that are affected by the value of <code>*pretty*</code>--with <code>*pretty*</code> bound to a specified value and that interpolates the resulting code into a <code><b>PROGN</b></code>. (The <code><b>PROGN</b></code> returns <code><b>NIL</b></code> just to keep things tidy.).
+        </p>
+        <pre>
+(defun codegen-html (ops pretty)
+  (let ((*pretty* pretty))
+    `(progn ,@(generate-code (optimize-static-output ops)) nil)))
+</pre>
+        <p>
+            With that function, you can then define <code>html</code> like this:
+        </p>
+        <pre>
+(defmacro html (&amp;whole whole &amp;body body)
+  (declare (ignore body))
+  `(if *pretty*
+     (macrolet ((html (&amp;body body) (codegen-html (sexp-&gt;ops body) t)))
+       (let ((*html-pretty-printer* (get-pretty-printer))) ,whole))
+     (macrolet ((html (&amp;body body) (codegen-html (sexp-&gt;ops body) nil)))
+       ,whole)))
+</pre>
+        <p>
+            The <code><b>&amp;whole</b></code> parameter represents the original <code>html</code> form, and because it's interpolated into the expansion in the bodies of the two <code><b>MACROLET</b></code>s, it will be reprocessed with each of the new definitions of <code>html</code>, the one that generates pretty-printing code and the other that generates non-pretty-printing code. Note that the variable <code>*pretty*</code> is used both during macro expansion <i>and</i> when the resulting code is run. It's used at macro expansion time by <code>codegen-html</code> to cause <code>generate-code</code> to generate one kind of code or the other. And it's used at runtime, in the <code><b>IF</b></code> generated by the top-level <code>html</code> macro, to determine whether the pretty-printing or non-pretty-printing code should actually run.
+        </p>
+        <h2>
+            <a name="the-end-of-the-line" id="the-end-of-the-line">The End of the Line</a>
+        </h2>
+        <p>
+            As usual, you could keep working with this code to enhance it in various ways. One interesting avenue to pursue is to use the underlying output generation framework to emit other kinds of output. In the version of FOO you can download from the book's Web site, you'll find some code that implements CSS output that can be integrated into HTML output in both the interpreter and compiler. That's an interesting case because CSS's syntax can't be mapped to s-expressions in such a trivial way as HTML's can. However, if you look at that code, you'll see it's still possible to define an s-expression syntax for representing the various constructs available in CSS.
+        </p>
+        <p>
+            A more ambitious undertaking would be to add support for generating embedded JavaScript. Done right, adding JavaScript support to FOO could yield two big wins. One is that after you define an s-expression syntax that you can map to JavaScript syntax, then you can start writing macros, in Common Lisp, to add new constructs to the language you use to write client-side code, which will then be compiled to JavaScript. The other is that, as part of the FOO s-expression JavaScript to regular JavaScript translation, you could deal with the subtle but annoying differences between JavaScript implementations in different browsers. That is, the JavaScript code that FOO generates could either contain the appropriate conditional code to do one thing in one browser and another in a different browser or could generate different code depending on which browser you wanted to support. Then if you use FOO in dynamically generated pages, it could use information about the User-Agent making the request to generate the right flavor of JavaScript for that browser.
+        </p>
+        <p>
+            But if that interests you, you'll have to implement it yourself since this is the end of the last practical chapter of this book. In the next chapter I'll wrap things up, discussing briefly some topics that I haven't touched on elsewhere in the book such as how to find libraries, how to optimize Common Lisp code, and how to deliver Lisp applications.
+        </p>
+        <hr>
+        <div class="notes">
+            <p>
+                <sup>1</sup>The analogy between FOO's special operators, and macros, which I'll discuss in the next section, and Lisp's own is fairly sound. In fact, understanding how FOO's special operators and macros work may give you some insight into why Common Lisp is put together the way it is.
+            </p>
+            <p>
+                <sup>2</sup>The <code>:noescape</code> and <code>:attribute</code> special operators must be defined as special operators because FOO determines what escapes to use at compile time, not at runtime. This allows FOO to escape literal values at compile time, which is much more efficient than having to scan all output at runtime.
+            </p>
+            <p>
+                <sup>3</sup>Note that <code>&amp;attributes</code> is just another symbol; there's nothing intrinsically special about names that start with <code>&amp;</code>.
+            </p>
+            <p>
+                <sup>4</sup>The one element of the underlying language-processing infrastructure that's not currently exposed through special operators is the indentation. If you wanted to make FOO more flexible, albeit at the cost of making its API that much more complex, you could add special operators for manipulating the underlying indenting printer. But it seems like the cost of having to explain the extra special operators would outweigh the rather small gain in expressiveness.
+            </p>
+        </div>
+        <div class="copyright">
+            Copyright © 2003-2005, Peter Seibel
+        </div>
+    </body>
+</html>

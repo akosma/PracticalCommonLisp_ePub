@@ -1,0 +1,637 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.01//EN">
+<html>
+    <head>
+        <title>
+            The Special Operators
+        </title>
+        <link rel="stylesheet" type="text/css" href="style.css">
+    </head>
+    <body>
+        <h1>
+            20. The Special Operators
+        </h1>
+        <p>
+            In a way, the most impressive aspect of the condition system covered in the previous chapter is that if it wasn't already part of the language, it could be written entirely as a user-level library. This is possible because Common Lisp's special operators--while none touches directly on signaling or handling conditions--provide enough access to the underlying machinery of the language to be able to do things such as control the unwinding of the stack.
+        </p>
+        <p>
+            In previous chapters I've discussed the most frequently used special operators, but it's worth being familiar with the others for two reasons. First, some of the infrequently used special operators are used infrequently simply because whatever need they address doesn't arise that often. It's good to be familiar with these special operators so when one of them is called for, you'll at least know it exists. Second, because the 25 special operators--along with the basic rule for evaluating function calls and the built-in data types--provide the foundation for the rest of the language, a passing familiarity with them will help you understand how the language works.
+        </p>
+        <p>
+            In this chapter, I'll discuss all the special operators, some briefly and some at length, so you can see how they fit together. I'll point out which ones you can expect to use directly in your own code, which ones serve as the basis for other constructs that you use all the time, and which ones you'll rarely use directly but which can be handy in macro-generated code.
+        </p>
+        <h2>
+            <a name="controlling-evaluation" id="controlling-evaluation">Controlling Evaluation</a>
+        </h2>
+        <p>
+            The first category of special operators contains the three operators that provide basic control over the evaluation of forms. They're <code><b>QUOTE</b></code>, <code><b>IF</b></code>, and <code><b>PROGN</b></code>, and I've discussed them all already. However, it's worth noting how each of these special operators provides one fundamental kind of control over the evaluation of one or more forms. <code><b>QUOTE</b></code> prevents evaluation altogether and allows you to get at s-expressions as data. <code><b>IF</b></code> provides the fundamental boolean choice operation from which all other conditional execution constructs can be built.<sup>1</sup> And <code><b>PROGN</b></code> provides the ability to sequence a number of forms.
+        </p>
+        <h2>
+            <a name="manipulating-the-lexical-environment" id="manipulating-the-lexical-environment">Manipulating the Lexical Environment</a>
+        </h2>
+        <p>
+            The largest class of special operators contains the operators that manipulate and access the <i>lexical environment</i>. <code><b>LET</b></code> and <code><b>LET*</b></code>, which I've already discussed, are examples of special operators that manipulate the lexical environment since they can introduce new lexical bindings for variables. Any construct, such as a <code><b>DO</b></code> or <code><b>DOTIMES</b></code>, that binds lexical variables will have to expand into a <code><b>LET</b></code> or <code><b>LET*</b></code>.<sup>2</sup> The <code><b>SETQ</b></code> special operator is one that accesses the lexical environment since it can be used to set variables whose bindings were created by <code><b>LET</b></code> and <code><b>LET*</b></code>.
+        </p>
+        <p>
+            Variables, however, aren't the only thing that can be named within a lexical scope. While most functions are defined globally with <code><b>DEFUN</b></code>, it's also possible to create local functions with the special operators <code><b>FLET</b></code> and <code><b>LABELS</b></code>, local macros with <code><b>MACROLET</b></code>, and a special kind of macro, called a <i>symbol macro</i>, with <code><b>SYMBOL-MACROLET</b></code>.
+        </p>
+        <p>
+            Much like <code><b>LET</b></code> allows you to introduce a lexical variable whose scope is the body of the <code><b>LET</b></code>, <code><b>FLET</b></code> and <code><b>LABELS</b></code> let you define a function that can be referred to only within the scope of the <code><b>FLET</b></code> or <code><b>LABELS</b></code> form. These special operators are handy when you need a local function that's a bit too complex to define inline as a <code><b>LAMBDA</b></code> expression or that you need to use more than once. Both have the same basic form, which looks like this:
+        </p>
+        <pre>
+(flet (<i>function-definition</i>*)
+  <i>body-form</i>*)
+</pre>
+        <p>
+            and like this:
+        </p>
+        <pre>
+(labels (<i>function-definition</i>*)
+  <i>body-form</i>*)
+</pre>
+        <p>
+            where each <i>function-definition</i> has the following form:
+        </p>
+        <pre>
+(<i>name</i> (<i>parameter</i>*) <i>form</i>*)
+</pre>
+        <p>
+            The difference between <code><b>FLET</b></code> and <code><b>LABELS</b></code> is that the names of the functions defined with <code><b>FLET</b></code> can be used only in the body of the <code><b>FLET</b></code>, while the names introduced by <code><b>LABELS</b></code> can be used immediately, including in the bodies of the functions defined by the <code><b>LABELS</b></code>. Thus, <code><b>LABELS</b></code> can define recursive functions, while <code><b>FLET</b></code> can't. It might seem limiting that <code><b>FLET</b></code> can't be used to define recursive functions, but Common Lisp provides both <code><b>FLET</b></code> and <code><b>LABELS</b></code> because sometimes it's useful to be able to write local functions that can call another function of the same name, either a globally defined function or a local function from an enclosing scope.
+        </p>
+        <p>
+            Within the body of a <code><b>FLET</b></code> or <code><b>LABELS</b></code>, you can use the names of the functions defined just like any other function, including with the <code><b>FUNCTION</b></code> special operator. Since you can use <code><b>FUNCTION</b></code> to get the function object representing a function defined with <code><b>FLET</b></code> or <code><b>LABELS</b></code>, and since a <code><b>FLET</b></code> or <code><b>LABELS</b></code> can be in the scope of other binding forms such as <code><b>LET</b></code>s, these functions can be closures.
+        </p>
+        <p>
+            Because the local functions can refer to variables from the enclosing scope, they can often be written to take fewer parameters than the equivalent helper functions. This is particularly handy when you need to pass a function that takes a single argument as a functional parameter. For example, in the following function, which you'll see again in Chapter 25, the <code><b>FLET</b></code>ed function, <code>count-version</code>, takes a single argument, as required by <code>walk-directory</code>, but can also use the variable <code>versions</code>, introduced by the enclosing <code><b>LET</b></code>:
+        </p>
+        <pre>
+(defun count-versions (dir)
+  (let ((versions (mapcar #'(lambda (x) (cons x 0)) '(2 3 4))))
+    (flet ((count-version (file)
+             (incf (cdr (assoc (major-version (read-id3 file)) versions)))))
+      (walk-directory dir #'count-version :test #'mp3-p))
+    versions))
+</pre>
+        <p>
+            This function could also be written using an anonymous function in the place of the <code><b>FLET</b></code>ed <code>count-version</code>, but giving the function a meaningful name makes it a bit easier to read.
+        </p>
+        <p>
+            And when a helper function needs to recurse, an anonymous function just won't do.<sup>3</sup> When you don't want to define a recursive helper function as a global function, you can use <code><b>LABELS</b></code>. For example, the following function, <code>collect-leaves</code>, uses the recursive helper function <code>walk</code> to walk a tree and gather all the atoms in the tree into a list, which <code>collect-leaves</code> then returns (after reversing it):
+        </p>
+        <pre>
+(defun collect-leaves (tree)
+  (let ((leaves ()))
+    (labels ((walk (tree)
+               (cond
+                 ((null tree))
+                 ((atom tree) (push tree leaves))
+                 (t (walk (car tree))
+                    (walk (cdr tree))))))
+      (walk tree))
+    (nreverse leaves)))
+</pre>
+        <p>
+            Notice again how, within the <code>walk</code> function, you can refer to the variable, <code>leaves</code>, introduced by the enclosing <code><b>LET</b></code>.
+        </p>
+        <p>
+            <code><b>FLET</b></code> and <code><b>LABELS</b></code> are also useful operations to use in macro expansions--a macro can expand into code that contains a <code><b>FLET</b></code> or <code><b>LABELS</b></code> to create functions that can be used within the body of the macro. This technique can be used either to introduce functions that the user of the macro will call or simply as a way of organizing the code generated by the macro. This, for instance, is how a function such as <code><b>CALL-NEXT-METHOD</b></code>, which can be used only within a method definition, might be defined.
+        </p>
+        <p>
+            A near relative to <code><b>FLET</b></code> and <code><b>LABELS</b></code> is the special operator <code><b>MACROLET</b></code>, which you can use to define local macros. Local macros work just like global macros defined with <code><b>DEFMACRO</b></code> except without cluttering the global namespace. When a <code><b>MACROLET</b></code> form is evaluated, the body forms are evaluated with the local macro definitions in effect and possibly shadowing global function and macro definitions or local definitions from enclosing forms. Like <code><b>FLET</b></code> and <code><b>LABELS</b></code>, <code><b>MACROLET</b></code> can be used directly, but it's also a handy target for macro-generated code--by wrapping some user-supplied code in a <code><b>MACROLET</b></code>, a macro can provide constructs that can be used only within that code or can shadow a globally defined macro. You'll see an example of this latter use of <code><b>MACROLET</b></code> in Chapter 31.
+        </p>
+        <p>
+            Finally, one last macro-defining special operator is <code><b>SYMBOL-MACROLET</b></code>, which defines a special kind of macro called, appropriately enough, a <i>symbol macro</i>. Symbol macros are like regular macros except they can't take arguments and are referred to with a plain symbol rather than a list form. In other words, after you've defined a symbol macro with a particular name, any use of that symbol in a value position will be expanded and the resulting form evaluated in its place. This is how macros such as <code><b>WITH-SLOTS</b></code> and <code><b>WITH-ACCESSORS</b></code> are able to define "variables" that access the state of a particular object under the covers. For instance, the following <code><b>WITH-SLOTS</b></code> form:
+        </p>
+        <pre>
+(with-slots (x y z) foo (list x y z)))
+</pre>
+        <p>
+            might expand into this code that uses <code><b>SYMBOL-MACROLET</b></code>:
+        </p>
+        <pre>
+(let ((#:g149 foo))
+  (symbol-macrolet
+      ((x (slot-value #:g149 'x))
+       (y (slot-value #:g149 'y))
+       (z (slot-value #:g149 'z)))
+    (list x y z)))
+</pre>
+        <p>
+            When the expression <code>(list x y z)</code> is evaluated, the symbols <code>x</code>, <code>y</code>, and <code>z</code> will be replaced with their expansions, such as <code>(slot-value #:g149 'x)</code>.<sup>4</sup>
+        </p>
+        <p>
+            Symbol macros are most often local, defined with <code><b>SYMBOL-MACROLET</b></code>, but Common Lisp also provides a macro <code><b>DEFINE-SYMBOL-MACRO</b></code> that defines a global symbol macro. A symbol macro defined with <code><b>SYMBOL-MACROLET</b></code> shadows other symbol macros of the same name defined with <code><b>DEFINE-SYMBOL-MACRO</b></code> or enclosing <code><b>SYMBOL-MACROLET</b></code> forms.
+        </p>
+        <h2>
+            <a name="local-flow-of-control" id="local-flow-of-control">Local Flow of Control</a>
+        </h2>
+        <p>
+            The next four special operators I'll discuss also create and use names in the lexical environment but for the purposes of altering the flow of control rather than defining new functions and macros. I've mentioned all four of these special operators in passing because they provide the underlying mechanisms used by other language features. They're <code><b>BLOCK</b></code>, <code><b>RETURN-FROM</b></code>, <code><b>TAGBODY</b></code>, and <code><b>GO</b></code>. The first two, <code><b>BLOCK</b></code> and <code><b>RETURN-FROM</b></code>, are used together to write code that returns immediately from a section of code--I discussed <code><b>RETURN-FROM</b></code> in Chapter 5 as a way to return immediately from a function, but it's more general than that. The other two, <code><b>TAGBODY</b></code> and <code><b>GO</b></code>, provide a quite low-level goto construct that's the basis for all the higher-level looping constructs you've already seen.
+        </p>
+        <p>
+            The basic skeleton of a <code><b>BLOCK</b></code> form is this:
+        </p>
+        <pre>
+(block <i>name</i>
+  <i>form</i>*)
+</pre>
+        <p>
+            The <i>name</i> is a symbol, and the <i>forms</i> are Lisp forms. The forms are evaluated in order, and the value of the last form is returned as the value of the <code><b>BLOCK</b></code> unless a <code><b>RETURN-FROM</b></code> is used to return from the block early. A <code><b>RETURN-FROM</b></code> form, as you saw in Chapter 5, consists of the name of the block to return from and, optionally, a form that provides a value to return. When a <code><b>RETURN-FROM</b></code> is evaluated, it causes the named <code><b>BLOCK</b></code> to return immediately. If <code><b>RETURN-FROM</b></code> is called with a return value form, the <code><b>BLOCK</b></code> will return the resulting value; otherwise, the <code><b>BLOCK</b></code> evaluates to <code><b>NIL</b></code>.
+        </p>
+        <p>
+            A <code><b>BLOCK</b></code> name can be any symbol, which includes <code><b>NIL</b></code>. Many of the standard control construct macros, such as <code><b>DO</b></code>, <code><b>DOTIMES</b></code>, and <code><b>DOLIST</b></code>, generate an expansion consisting of a <code><b>BLOCK</b></code> named <code><b>NIL</b></code>. This allows you to use the <code><b>RETURN</b></code> macro, which is a bit of syntactic sugar for <code>(return-from nil ...)</code>, to break out of such loops. Thus, the following loop will print at most ten random numbers, stopping as soon as it gets a number greater than 50:
+        </p>
+        <pre>
+(dotimes (i 10)
+  (let ((answer (random 100)))
+    (print answer)
+    (if (&gt; answer 50) (return))))
+</pre>
+        <p>
+            Function-defining macros such as <code><b>DEFUN</b></code>, <code><b>FLET</b></code>, and <code><b>LABELS</b></code>, on the other hand, wrap their bodies in a <code><b>BLOCK</b></code> with the same name as the function. That's why you can use <code><b>RETURN-FROM</b></code> to return from a function.
+        </p>
+        <p>
+            <code><b>TAGBODY</b></code> and <code><b>GO</b></code> have a similar relationship to each other as <code><b>BLOCK</b></code> and <code><b>RETURN-FROM</b></code>: a <code><b>TAGBODY</b></code> form defines a context in which names are defined that can be used by <code><b>GO</b></code>. The skeleton of a <code><b>TAGBODY</b></code> is as follows:
+        </p>
+        <pre>
+(tagbody
+  <i>tag-or-compound-form</i>*)
+</pre>
+        <p>
+            where each <i>tag-or-compound-form</i> is either a symbol, called a <i>tag</i>, or a nonempty list form. The list forms are evaluated in order and the tags ignored, except as I'll discuss in a moment. After the last form of the <code><b>TAGBODY</b></code> is evaluated, the <code><b>TAGBODY</b></code> returns <code><b>NIL</b></code>. Anywhere within the lexical scope of the <code><b>TAGBODY</b></code> you can use the <code><b>GO</b></code> special operator to jump immediately to any of the tags, and evaluation will resume with the form following the tag. For instance, you can write a trivial infinite loop with <code><b>TAGBODY</b></code> and <code><b>GO</b></code> like this:
+        </p>
+        <pre>
+(tagbody
+ top
+   (print 'hello)
+   (go top))
+</pre>
+        <p>
+            Note that while the tag names must appear at the top level of the <code><b>TAGBODY</b></code>, not nested within other forms, the <code><b>GO</b></code> special operator can appear anywhere within the scope of the <code><b>TAGBODY</b></code>. This means you could write a loop that loops a random number of times like this:
+        </p>
+        <pre>
+(tagbody
+ top
+   (print 'hello)
+   (when (plusp (random 10)) (go top)))
+</pre>
+        <p>
+            An even sillier example of <code><b>TAGBODY</b></code>, which shows you can have multiple tags in a single <code><b>TAGBODY</b></code>, looks like this:
+        </p>
+        <pre>
+(tagbody
+ a (print 'a) (if (zerop (random 2)) (go c))
+ b (print 'b) (if (zerop (random 2)) (go a))
+ c (print 'c) (if (zerop (random 2)) (go b)))
+</pre>
+        <p>
+            This form will jump around randomly printing <i>a</i>s, <i>b</i>s, and <i>c</i>s until eventually the last <code><b>RANDOM</b></code> expression returns 1 and the control falls off the end of the <code><b>TAGBODY</b></code>.
+        </p>
+        <p>
+            <code><b>TAGBODY</b></code> is rarely used directly since it's almost always easier to write iterative constructs in terms of the existing looping macros. It's handy, however, for translating algorithms written in other languages into Common Lisp, either automatically or manually. An example of an automatic translation tool is the FORTRAN-to-Common Lisp translator, f2cl, that translates FORTRAN source code into Common Lisp in order to make various FORTRAN libraries available to Common Lisp programmers. Since many FORTRAN libraries were written before the structured programming revolution, they're full of gotos. The f2cl compiler can simply translate those gotos to <code><b>GO</b></code>s within appropriate <code><b>TAGBODY</b></code>s.<sup>5</sup>
+        </p>
+        <p>
+            Similarly, <code><b>TAGBODY</b></code> and <code><b>GO</b></code> can be handy when translating algorithms described in prose or by flowcharts--for instance, in Donald Knuth's classic series <i>The Art of Computer Programming</i>, he describes algorithms using a "recipe" format: step 1, do this; step 2, do that; step 3, go back to step 2; and so on. For example, on page 142 of <i>The Art of Computer Programming, Volume 2: Seminumerical Algorithms</i>, Third Edition (Addison-Wesley, 1998), he describes Algorithm S, which you'll use in Chapter 27, in this form:
+        </p>
+        <blockquote>
+            Algorithm S (Selection sampling technique). To select n records at random from a set of N, where 0 &lt; n &lt;= N.
+        </blockquote>
+        <blockquote>
+            S1. [Initialize.] Set t &lt;-- 0, m &lt;-- 0. (During this algorithm, m represents the number of records selected so far, and t is the total number of input records that we have dealt with.)
+        </blockquote>
+        <blockquote>
+            S2. [Generate U.] Generate a random number U, uniformly distributed between zero and one.
+        </blockquote>
+        <blockquote>
+            S3. [Test.] If (N - t)U &gt;= n - m, go to step S5.
+        </blockquote>
+        <blockquote>
+            S4. [Select.] Select the next record for the sample, and increase m and t by 1. If m &lt; n, go to step S2; otherwise the sample is complete and the algorithm terminates.
+        </blockquote>
+        <blockquote>
+            S5. [Skip.] Skip the next record (do not include it in the sample), increase t by 1, and go back to step S2.
+        </blockquote>
+        <p>
+            This description can be easily translated into a Common Lisp function, after renaming a few variables, as follows:
+        </p>
+        <pre>
+(defun algorithm-s (n max) ; max is N in Knuth's algorithm
+  (let (seen               ; t in Knuth's algorithm
+        selected           ; m in Knuth's algorithm
+        u                  ; U in Knuth's algorithm
+        (records ()))      ; the list where we save the records selected
+    (tagbody
+     s1
+       (setf seen 0)
+       (setf selected 0)
+     s2
+       (setf u (random 1.0))
+     s3
+       (when (&gt;= (* (- max seen) u) (- n selected)) (go s5))
+     s4
+       (push seen records)
+       (incf selected)
+       (incf seen)
+       (if (&lt; selected n)
+           (go s2)
+           (return-from algorithm-s (nreverse records)))
+     s5
+       (incf seen)
+       (go s2))))
+</pre>
+        <p>
+            It's not the prettiest code, but it's easy to verify that it's a faithful translation of Knuth's algorithm. But, this code, unlike Knuth's prose description, can be run and tested. Then you can start refactoring, checking after each change that the function still works.<sup>6</sup>
+        </p>
+        <p>
+            After pushing the pieces around a bit, you might end up with something like this:
+        </p>
+        <pre>
+(defun algorithm-s (n max)
+  (loop for seen from 0
+     when (&lt; (* (- max seen) (random 1.0)) n)
+     collect seen and do (decf n)
+     until (zerop n)))
+</pre>
+        <p>
+            While it may not be immediately obvious that this code correctly implements Algorithm S, if you got here via a series of functions that all behave identically to the original literal translation of Knuth's recipe, you'd have good reason to believe it's correct.
+        </p>
+        <h2>
+            <a name="unwinding-the-stack" id="unwinding-the-stack">Unwinding the Stack</a>
+        </h2>
+        <p>
+            Another aspect of the language that special operators give you control over is the behavior of the call stack. For instance, while you normally use <code><b>BLOCK</b></code> and <code><b>TAGBODY</b></code> to manage the flow of control within a single function, you can also use them, in conjunction with closures, to force an immediate nonlocal return from a function further down on the stack. That's because <code><b>BLOCK</b></code> names and <code><b>TAGBODY</b></code> tags can be closed over by any code within the lexical scope of the <code><b>BLOCK</b></code> or <code><b>TAGBODY</b></code>. For example, consider this function:
+        </p>
+        <pre>
+(defun foo ()
+  (format t "Entering foo~%")
+  (block a
+    (format t " Entering BLOCK~%")
+    (bar #'(lambda () (return-from a)))
+    (format t " Leaving BLOCK~%"))
+  (format t "Leaving foo~%"))
+</pre>
+        <p>
+            The anonymous function passed to <code>bar</code> uses <code><b>RETURN-FROM</b></code> to return from the <code><b>BLOCK</b></code>. But that <code><b>RETURN-FROM</b></code> doesn't get evaluated until the anonymous function is invoked with <code><b>FUNCALL</b></code> or <code><b>APPLY</b></code>. Now suppose <code>bar</code> looks like this:
+        </p>
+        <pre>
+(defun bar (fn)
+  (format t "  Entering bar~%")
+  (baz fn)
+  (format t "  Leaving bar~%"))
+</pre>
+        <p>
+            Still, the anonymous function isn't invoked. Now look at <code>baz</code>.
+        </p>
+        <pre>
+(defun baz (fn)
+  (format t "   Entering baz~%")
+  (funcall fn)
+  (format t "   Leaving baz~%"))
+</pre>
+        <p>
+            Finally the function is invoked. But what does it mean to <code><b>RETURN-FROM</b></code> a block that's several layers up on the call stack? Turns out it works fine--the stack is unwound back to the frame where the <code><b>BLOCK</b></code> was established and control returns from the <code><b>BLOCK</b></code>. The <code><b>FORMAT</b></code> expressions in <code>foo</code>, <code>bar</code>, and <code>baz</code> show this:
+        </p>
+        <pre>
+CL-USER&gt; (foo)
+Entering foo
+ Entering BLOCK
+  Entering bar
+   Entering baz
+Leaving foo
+NIL
+</pre>
+        <p>
+            Note that the only "Leaving . . ." message that prints is the one that appears after the <code><b>BLOCK</b></code> in <code>foo</code>.
+        </p>
+        <p>
+            Because the names of blocks are lexically scoped, a <code><b>RETURN-FROM</b></code> always returns from the smallest enclosing <code><b>BLOCK</b></code> in the lexical environment where the <code><b>RETURN-FROM</b></code> form appears even if the <code><b>RETURN-FROM</b></code> is executed in a different dynamic context. For instance, <code>bar</code> could also contain a <code><b>BLOCK</b></code> named <code>a</code>, like this:
+        </p>
+        <pre>
+(defun bar (fn)
+  (format t "  Entering bar~%")
+  (block a (baz fn))
+  (format t "  Leaving bar~%"))
+</pre>
+        <p>
+            This extra <code><b>BLOCK</b></code> won't change the behavior of <code>foo</code> at all--the name <code>a</code> is resolved lexically, at compile time, not dynamically, so the intervening block has no effect on the <code><b>RETURN-FROM</b></code>. Conversely, the name of a <code><b>BLOCK</b></code> can be used only by <code><b>RETURN-FROM</b></code>s appearing within the lexical scope of the <code><b>BLOCK</b></code>; there's no way for code outside the block to return from the block except by invoking a closure that closes over a <code><b>RETURN-FROM</b></code> from the lexical scope of the <code><b>BLOCK</b></code>.
+        </p>
+        <p>
+            <code><b>TAGBODY</b></code> and <code><b>GO</b></code> work the same way, in this regard, as <code><b>BLOCK</b></code> and <code><b>RETURN-FROM</b></code>. When you invoke a closure that contains a <code><b>GO</b></code> form, if the <code><b>GO</b></code> is evaluated, the stack will unwind back to the appropriate <code><b>TAGBODY</b></code> and then jump to the specified tag.
+        </p>
+        <p>
+            <code><b>BLOCK</b></code> names and <code><b>TAGBODY</b></code> tags, however, differ from lexical variable bindings in one important way. As I discussed in Chapter 6, lexical bindings have indefinite extent, meaning the bindings can stick around even after the binding form has returned. <code><b>BLOCK</b></code>s and <code><b>TAGBODY</b></code>s, on the other hand, have dynamic extent--you can <code><b>RETURN-FROM</b></code> a <code><b>BLOCK</b></code> or <code><b>GO</b></code> to a <code><b>TAGBODY</b></code> tag only while the <code><b>BLOCK</b></code> or <code><b>TAGBODY</b></code> is on the call stack. In other words, a closure that captures a block name or <code><b>TAGBODY</b></code> tag can be passed <i>down</i> the stack to be invoked later, but it can't be returned <i>up</i> the stack. If you invoke a closure that tries to <code><b>RETURN-FROM</b></code> a <code><b>BLOCK</b></code>, after the <code><b>BLOCK</b></code> itself has returned, you'll get an error. Likewise, trying to <code><b>GO</b></code> to a <code><b>TAGBODY</b></code> that no longer exists will cause an error.<sup>7</sup>
+        </p>
+        <p>
+            It's unlikely you'll need to use <code><b>BLOCK</b></code> and <code><b>TAGBODY</b></code> yourself for this kind of stack unwinding. But you'll likely be using them indirectly whenever you use the condition system, so understanding how they work should help you understand better what exactly, for instance, invoking a restart is doing.<sup>8</sup>
+        </p>
+        <p>
+            <code><b>CATCH</b></code> and <code><b>THROW</b></code> are another pair of special operators that can force the stack to unwind. You'll use these operators even less often than the others mentioned so far--they're holdovers from earlier Lisp dialects that didn't have Common Lisp's condition system. They definitely shouldn't be confused with <code>try</code>/<code>catch</code> and <code>try</code>/<code>except</code> constructs from languages such as Java and Python.
+        </p>
+        <p>
+            <code><b>CATCH</b></code> and <code><b>THROW</b></code> are the dynamic counterparts of <code><b>BLOCK</b></code> and <code><b>RETURN-FROM</b></code>. That is, you wrap <code><b>CATCH</b></code> around a body of code and then use <code><b>THROW</b></code> to cause the <code><b>CATCH</b></code> form to return immediately with a specified value. The difference is that the association between a <code><b>CATCH</b></code> and <code><b>THROW</b></code> is established dynamically--instead of a lexically scoped name, the label for a <code><b>CATCH</b></code> is an object, called a <i>catch tag</i>, and any <code><b>THROW</b></code> evaluated within the dynamic extent of the <code><b>CATCH</b></code> that throws that object will unwind the stack back to the <code><b>CATCH</b></code> form and cause it to return immediately. Thus, you can write a version of the <code>foo</code>, <code>bar</code>, and <code>baz</code> functions from before using <code><b>CATCH</b></code> and <code><b>THROW</b></code> instead of <code><b>BLOCK</b></code> and <code><b>RETURN-FROM</b></code> like this:
+        </p>
+        <pre>
+(defparameter *obj* (cons nil nil)) ; i.e. some arbitrary object
+
+(defun foo ()
+  (format t "Entering foo~%")
+  (catch *obj*
+    (format t " Entering CATCH~%")
+    (bar)
+    (format t " Leaving CATCH~%"))
+  (format t "Leaving foo~%"))
+
+(defun bar ()
+  (format t "  Entering bar~%")
+  (baz)
+  (format t "  Leaving bar~%"))
+
+(defun baz ()
+  (format t "   Entering baz~%")
+  (throw *obj* nil)
+  (format t "   Leaving baz~%"))
+</pre>
+        <p>
+            Notice how it isn't necessary to pass a closure down the stack--<code>baz</code> can call <code><b>THROW</b></code> directly. The result is quite similar to the earlier version.
+        </p>
+        <pre>
+CL-USER&gt; (foo)
+Entering foo
+ Entering CATCH
+  Entering bar
+   Entering baz
+Leaving foo
+NIL
+</pre>
+        <p>
+            However, <code><b>CATCH</b></code> and <code><b>THROW</b></code> are almost <i>too</i> dynamic. In both the <code><b>CATCH</b></code> and the <code><b>THROW</b></code>, the tag form is evaluated, which means their values are both determined at runtime. Thus, if some code in <code>bar</code> reassigned or rebound <code>*obj*</code>, the <code><b>THROW</b></code> in <code>baz</code> wouldn't throw to the same <code><b>CATCH</b></code>. This makes <code><b>CATCH</b></code> and <code><b>THROW</b></code> much harder to reason about than <code><b>BLOCK</b></code> and <code><b>RETURN-FROM</b></code>. The only advantage, which the version of <code>foo</code>, <code>bar</code>, and <code>baz</code> that use <code><b>CATCH</b></code> and <code><b>THROW</b></code> demonstrates, is there's no need to pass down a closure in order for low-level code to return from a <code><b>CATCH</b></code>--any code that runs within the dynamic extent of a <code><b>CATCH</b></code> can cause it to return by throwing the right object.
+        </p>
+        <p>
+            In older Lisp dialects that didn't have anything like Common Lisp's condition system, <code><b>CATCH</b></code> and <code><b>THROW</b></code> were used for error handling. However, to keep them manageable, the catch tags were usually just quoted symbols, so you <i>could</i> tell by looking at a <code><b>CATCH</b></code> and a <code><b>THROW</b></code> whether they would hook up at runtime. In Common Lisp you'll rarely have any call to use <code><b>CATCH</b></code> and <code><b>THROW</b></code> since the condition system is so much more flexible.
+        </p>
+        <p>
+            The last special operator related to controlling the stack is another one I've mentioned in passing before--<code><b>UNWIND-PROTECT</b></code>. <code><b>UNWIND-PROTECT</b></code> lets you control what happens as the stack unwinds--to make sure that certain code always runs regardless of how control leaves the scope of the <code><b>UNWIND-PROTECT</b></code>, whether by a normal return, by a restart being invoked, or by any of the ways discussed in this section.<sup>9</sup> The basic skeleton of <code><b>UNWIND-PROTECT</b></code> looks like this:
+        </p>
+        <pre>
+(unwind-protect <i>protected-form</i>
+  <i>cleanup-form</i>*)
+</pre>
+        <p>
+            The single <i>protected-form</i> is evaluated, and then, regardless of how it returns, the <i>cleanup-forms</i> are evaluated. If the <i>protected-form</i> returns normally, then whatever it returns is returned from the <code><b>UNWIND-PROTECT</b></code> after the cleanup forms run. The cleanup forms are evaluated in the same dynamic environment as the <code><b>UNWIND-PROTECT</b></code>, so the same dynamic variable bindings, restarts, and condition handlers will be visible to code in cleanup forms as were visible just before the <code><b>UNWIND-PROTECT</b></code>.
+        </p>
+        <p>
+            You'll occasionally use <code><b>UNWIND-PROTECT</b></code> directly. More often you'll use it as the basis for <code>WITH-</code> style macros, similar to <code><b>WITH-OPEN-FILE</b></code>, that evaluate any number of body forms in a context where they have access to some resource that needs to be cleaned up after they're done, regardless of whether they return normally or bail via a restart or other nonlocal exit. For example, if you were writing a database library that defined functions <code>open-connection</code> and <code>close-connection</code>, you might write a macro like this:<sup>10</sup>
+        </p>
+        <pre>
+(defmacro with-database-connection ((var &amp;rest open-args) &amp;body body)
+  `(let ((,var (open-connection ,@open-args)))
+    (unwind-protect (progn ,@body)
+      (close-connection ,var))))
+</pre>
+        <p>
+            which lets you write code like this:
+        </p>
+        <pre>
+(with-database-connection (conn :host "foo" :user "scott" :password "tiger")
+  (do-stuff conn)
+  (do-more-stuff conn))
+</pre>
+        <p>
+            and not have to worry about closing the database connection, since the <code><b>UNWIND-PROTECT</b></code> will make sure it gets closed no matter what happens in the body of the <code>with-database-connection</code> form.
+        </p>
+        <h2>
+            <a name="multiple-values" id="multiple-values">Multiple Values</a>
+        </h2>
+        <p>
+            Another feature of Common Lisp that I've mentioned in passing--in Chapter 11, when I discussed <code><b>GETHASH</b></code>--is the ability for a single form to return multiple values. I'll discuss it in greater detail now. It is, however, slightly misplaced in a chapter on special operators since the ability to return multiple values isn't provided by just one or two special operators but is deeply integrated into the language. The operators you'll most often use when dealing with multiple values are macros and functions, not special operators. But it is the case that the basic ability to get at multiple return values is provided by a special operator, <code><b>MULTIPLE-VALUE-CALL</b></code>, upon which the more commonly used <code><b>MULTIPLE-VALUE-BIND</b></code> macro is built.
+        </p>
+        <p>
+            The key thing to understand about multiple values is that returning multiple values is quite different from returning a list--if a form returns multiple values, unless you do something specific to capture the multiple values, all but the <i>primary value</i> will be silently discarded. To see the distinction, consider the function <code><b>GETHASH</b></code>, which returns two values: the value found in the hash table and a boolean that's <code><b>NIL</b></code> when no value was found. If it returned those two values in a list, every time you called <code><b>GETHASH</b></code> you'd have to take apart the list to get at the actual value, regardless of whether you cared about the second return value. Suppose you have a hash table, <code>*h*</code>, that contains numeric values. If <code><b>GETHASH</b></code> returned a list, you couldn't write something like this:
+        </p>
+        <pre>
+(+ (gethash 'a *h*) (gethash 'b *h*))
+</pre>
+        <p>
+            because <code><b>+</b></code> expects its arguments to be numbers, not lists. But because the multiple value mechanism silently discards the secondary return value when it's not wanted, this form works fine.
+        </p>
+        <p>
+            There are two aspects to using multiple values--returning multiple values and getting at the nonprimary values returned by forms that return multiple values. The starting points for returning multiple values are the functions <code><b>VALUES</b></code> and <code><b>VALUES-LIST</b></code>. These are regular functions, not special operators, so their arguments are passed in the normal way. <code><b>VALUES</b></code> takes a variable number of arguments and returns them as multiple values; <code><b>VALUES-LIST</b></code> takes a single list and returns its elements as multiple values. In other words:
+        </p>
+        <pre>
+(values-list x) === (apply #'values x)
+</pre>
+        <p>
+            The mechanism by which multiple values are returned is implementation dependent just like the mechanism for passing arguments into functions is. Almost all language constructs that return the value of some subform will "pass through" multiple values, returning all the values returned by the subform. Thus, a function that returns the result of calling <code><b>VALUES</b></code> or <code><b>VALUES-LIST</b></code> will itself return multiple values--and so will another function whose result comes from calling the first function. And so on.<sup>11</sup>
+        </p>
+        <p>
+            But when a form is evaluated in a value position, only the primary value will be used, which is why the previous addition form works the way you'd expect. The special operator <code><b>MULTIPLE-VALUE-CALL</b></code> provides the mechanism for getting your hands on the multiple values returned by a form. <code><b>MULTIPLE-VALUE-CALL</b></code> is similar to <code><b>FUNCALL</b></code> except that while <code><b>FUNCALL</b></code> is a regular function and, therefore, can see and pass on only the primary values passed to it, <code><b>MULTIPLE-VALUE-CALL</b></code> passes, to the function returned by its first subform, <i>all</i> the values returned by the remaining subforms.
+        </p>
+        <pre>
+(funcall #'+ (values 1 2) (values 3 4))             ==&gt; 4
+(multiple-value-call #'+ (values 1 2) (values 3 4)) ==&gt; 10
+</pre>
+        <p>
+            However, it's fairly rare that you'll simply want to pass all the values returned by a function onto another function. More likely, you'll want to stash the multiple values in different variables and then do something with them. The <code><b>MULTIPLE-VALUE-BIND</b></code> macro, which you saw in Chapter 11, is the most frequently used operator for accepting multiple return values. Its skeleton looks like this:
+        </p>
+        <pre>
+(multiple-value-bind (<i>variable</i>*) <i>values-form</i>
+  <i>body-form</i>*)
+</pre>
+        <p>
+            The <i>values-form</i> is evaluated, and the multiple values it returns are bound to the <i>variables</i>. Then the <i>body-forms</i> are evaluated with those bindings in effect. Thus:
+        </p>
+        <pre>
+(multiple-value-bind (x y) (values 1 2)
+  (+ x y)) ==&gt; 3
+</pre>
+        <p>
+            Another macro, <code><b>MULTIPLE-VALUE-LIST</b></code>, is even simpler--it takes a single form, evaluates it, and collects the resulting multiple values into a list. In other words, it's the inverse of <code><b>VALUES-LIST</b></code>.
+        </p>
+        <pre>
+CL-USER&gt; (multiple-value-list (values 1 2))
+(1 2)
+CL-USER&gt; (values-list (multiple-value-list (values 1 2)))
+1
+2
+</pre>
+        <p>
+            However, if you find yourself using <code><b>MULTIPLE-VALUE-LIST</b></code> a lot, it may be a sign that some function should be returning a list to start with rather than multiple values.
+        </p>
+        <p>
+            Finally, if you want to assign multiple values returned by a form to existing variables, you can use <code><b>VALUES</b></code> as a <code><b>SETF</b></code>able place. For example:
+        </p>
+        <pre>
+CL-USER&gt; (defparameter *x* nil)
+*X*
+CL-USER&gt; (defparameter *y* nil)
+*Y*
+CL-USER&gt; (setf (values *x* *y*) (floor (/ 57 34)))
+1
+23/34
+CL-USER&gt; *x*
+1
+CL-USER&gt; *y*
+23/34
+</pre>
+        <h2>
+            <a name="eval-when" id="eval-when">EVAL-WHEN</a>
+        </h2>
+        <p>
+            A special operator you'll need to understand in order to write certain kinds of macros is <code><b>EVAL-WHEN</b></code>. For some reason, Lisp books often treat <code><b>EVAL-WHEN</b></code> as a wizards-only topic. But the only prerequisite to understanding <code><b>EVAL-WHEN</b></code> is an understanding of how the two functions <code><b>LOAD</b></code> and <code><b>COMPILE-FILE</b></code> interact. And understanding <code><b>EVAL-WHEN</b></code> will be important as you start writing certain kinds of more sophisticated macros, such as the ones you'll write in Chapters 24 and 31.
+        </p>
+        <p>
+            I've touched briefly on the relation between <code><b>LOAD</b></code> and <code><b>COMPILE-FILE</b></code> in previous chapters, but it's worth reviewing again here. The job of <code><b>LOAD</b></code> is to load a file and evaluate all the top-level forms it contains. The job of <code><b>COMPILE-FILE</b></code> is to compile a source file into a FASL file, which can then be loaded with <code><b>LOAD</b></code> such that <code>(load "foo.lisp")</code> and <code>(load "foo.fasl")</code> are essentially equivalent.
+        </p>
+        <p>
+            Because <code><b>LOAD</b></code> evaluates each form before reading the next, the side effects of evaluating forms earlier in the file can affect how forms later in the form are read and evaluated. For instance, evaluating an <code><b>IN-PACKAGE</b></code> form changes the value of <code><b>*PACKAGE*</b></code>, which will affect the way subsequent forms are read.<sup>12</sup> Similarly, a <code><b>DEFMACRO</b></code> form early in a file can define a macro that can then be used by code later in the file.<sup>13</sup>
+        </p>
+        <p>
+            <code><b>COMPILE-FILE</b></code>, on the other hand, normally doesn't evaluate the forms it's compiling; it's when the FASL is loaded that the forms--or their compiled equivalents--will be evaluated. However, <code><b>COMPILE-FILE</b></code> must evaluate some forms, such as <code><b>IN-PACKAGE</b></code> and <code><b>DEFMACRO</b></code> forms, in order to keep the behavior of <code>(load "foo.lisp")</code> and <code>(load "foo.fasl")</code> consistent.
+        </p>
+        <p>
+            So how do macros such as <code><b>IN-PACKAGE</b></code> and <code><b>DEFMACRO</b></code> work when processed by <code><b>COMPILE-FILE</b></code>? In some pre-Common Lisp versions of Lisp, the file compiler simply knew it should evaluate certain macros in addition to compiling them. Common Lisp avoided the need for such kludges by borrowing the <code><b>EVAL-WHEN</b></code> special operator from Maclisp. This operator, as its name suggests, allows you to control when specific bits of code are evaluated. The skeleton of an <code><b>EVAL-WHEN</b></code> form looks like this:
+        </p>
+        <pre>
+(eval-when (<i>situation</i>*)
+  <i>body-form</i>*)
+</pre>
+        <p>
+            There are three possible <i>situations</i>--<code>:compile-toplevel</code>, <code>:load-toplevel</code>, and <code>:execute</code>--and which ones you specify controls when the <i>body-forms</i> will be evaluated. An <code><b>EVAL-WHEN</b></code> with multiple situations is equivalent to several <code><b>EVAL-WHEN</b></code> forms, one per situation, each with the same body code. To explain the meaning of the three situations, I'll need to explain a bit about how <code><b>COMPILE-FILE</b></code>, which is also referred to as the <i>file compiler</i>, goes about compiling a file.
+        </p>
+        <p>
+            To explain how <code><b>COMPILE-FILE</b></code> compiles <code><b>EVAL-WHEN</b></code> forms, I need to introduce a distinction between compiling <i>top-level</i> forms and compiling non-top-level forms. A top-level form is, roughly speaking, one that will be compiled into code that will be run when the FASL is loaded. Thus, all forms that appear directly at the top level of a source file are compiled as top-level forms. Similarly, any forms appearing directly in a top-level <code><b>PROGN</b></code> are compiled as top-level forms since the <code><b>PROGN</b></code> itself doesn't <i>do</i> anything--it just groups together its subforms, which will be run when the FASL is loaded.<sup>14</sup> Similarly, forms appearing directly in a <code><b>MACROLET</b></code> or <code><b>SYMBOL-MACROLET</b></code> are compiled as top-level forms because after the compiler has expanded the local macros or symbol macros, there will be no remnant of the <code><b>MACROLET</b></code> or <code><b>SYMBOL-MACROLET</b></code> in the compiled code. Finally, the expansion of a top-level macro form will be compiled as a top-level form.
+        </p>
+        <p>
+            Thus, a <code><b>DEFUN</b></code> appearing at the top level of a source file is a top-level form--the code that defines the function and associates it with its name will run when the FASL is loaded--but the forms within the body of the function, which won't run until the function is called, aren't top-level forms. Most forms are compiled the same when compiled as top-level and non-top-level forms, but the semantics of an <code><b>EVAL-WHEN</b></code> depend on whether it's being compiled as a top- level form, compiled as a non-top-level form, or simply evaluated, combined with what situations are listed in its situation list.
+        </p>
+        <p>
+            The situations <code>:compile-toplevel</code> and <code>:load-toplevel</code> control the meaning of an <code><b>EVAL-WHEN</b></code> compiled as a top-level form. When <code>:compile-toplevel</code> is present, the file compiler will evaluate the subforms at compile time. When <code>:load-toplevel</code> is present, it will compile the subforms as top-level forms. If neither of these situations is present in a top-level <code><b>EVAL-WHEN</b></code>, the compiler ignores it.
+        </p>
+        <p>
+            When an <code><b>EVAL-WHEN</b></code> is compiled as a non-top-level form, it's either compiled like a <code><b>PROGN</b></code>, if the <code>:execute</code> situation is specified, or ignored. Similarly, an evaluated <code><b>EVAL-WHEN</b></code>--which includes top-level <code><b>EVAL-WHEN</b></code>s in a source file processed by <code><b>LOAD</b></code> and <code><b>EVAL-WHEN</b></code>s evaluated at compile time because they appear as subforms of a top-level <code><b>EVAL-WHEN</b></code> with the <code>:compile-toplevel</code> situation--is treated like a <code><b>PROGN</b></code> if <code>:execute</code> is present and ignored otherwise.
+        </p>
+        <p>
+            Thus, a macro such as <code><b>IN-PACKAGE</b></code> can have the necessary effect at both compile time and when loading from source by expanding into an <code><b>EVAL-WHEN</b></code> like the following:
+        </p>
+        <pre>
+(eval-when (:compile-toplevel :load-toplevel :execute)
+  (setf *package* (find-package "PACKAGE-NAME")))
+</pre>
+        <p>
+            <code><b>*PACKAGE*</b></code> will be set at compile time because of the <code>:compile-toplevel</code> situation, set when the FASL is loaded because of <code>:load-toplevel</code>, and set when the source is loaded because of the <code>:execute</code>.
+        </p>
+        <p>
+            There are two ways you're most likely to use <code><b>EVAL-WHEN</b></code>. One is if you want to write macros that need to save some information at compile time to be used when generating the expansion of other macro forms in the same file. This typically arises with definitional macros where a definition early in a file can affect the code generated for a definition later in the same file. You'll write this kind of macro in Chapter 24.
+        </p>
+        <p>
+            The other time you might need <code><b>EVAL-WHEN</b></code> is if you want to put the definition of a macro and helper functions it uses in the same file as code that uses the macro. <code><b>DEFMACRO</b></code> already includes an <code><b>EVAL-WHEN</b></code> in its expansion so the macro definition is immediately available to be used later in the file. But <code><b>DEFUN</b></code> normally doesn't make function definitions available at compile time. But if you use a macro in the same file as it's defined in, you need the macro <i>and</i> any functions it uses to be defined. If you wrap the <code><b>DEFUN</b></code>s of any helper functions used by the macro in an <code><b>EVAL-WHEN</b></code> with <code>:compile-toplevel</code>, the definitions will be available when the macro's expansion function runs. You'll probably want to include <code>:load-toplevel</code> and <code>:execute</code> as well since the macros will also need the function definitions after the file is compiled and loaded or if you load the source instead of compiling.
+        </p>
+        <h2>
+            <a name="other-special-operators" id="other-special-operators">Other Special Operators</a>
+        </h2>
+        <p>
+            The four remaining special operators, <code><b>LOCALLY</b></code>, <code><b>THE</b></code>, <code><b>LOAD-TIME-VALUE</b></code>, and <code><b>PROGV</b></code>, all allow you to get at parts of the underlying language that can't be accessed any other way. <code><b>LOCALLY</b></code> and <code><b>THE</b></code> are part of Common Lisp's declaration system, which is used to communicate things to the compiler that don't affect the meaning of your code but that may help the compiler generate better code--faster, clearer error messages, and so on.<sup>15</sup> I'll discuss declarations briefly in Chapter 32.
+        </p>
+        <p>
+            The other two, <code><b>LOAD-TIME-VALUE</b></code> and <code><b>PROGV</b></code>, are infrequently used, and explaining the reason why you might ever <i>want</i> to use them would take longer than explaining what they do. So I'll just tell you what they do so you know they're there. Someday you'll hit on one of those rare times when they're just the thing, and then you'll be ready.
+        </p>
+        <p>
+            <code><b>LOAD-TIME-VALUE</b></code> is used, as its name suggests, to create a value that's determined at load time. When the file compiler compiles code that contains a <code><b>LOAD-TIME-VALUE</b></code> form, it arranges to evaluate the first subform once, when the FASL is loaded, and for the code containing the <code><b>LOAD-TIME-VALUE</b></code> form to refer to that value. In other words, instead of writing this:
+        </p>
+        <pre>
+(defvar *loaded-at* (get-universal-time))
+
+(defun when-loaded () *loaded-at*)
+</pre>
+        <p>
+            you can write the following:
+        </p>
+        <pre>
+(defun when-loaded () (load-time-value (get-universal-time)))
+</pre>
+        <p>
+            In code not processed by <code><b>COMPILE-FILE</b></code>, <code><b>LOAD-TIME-VALUE</b></code> is evaluated once when the code is compiled, which may be when you explicitly compile a function with <code><b>COMPILE</b></code> or earlier because of implicit compilation performed by the implementation in the course of evaluating the code. In uncompiled code, <code><b>LOAD-TIME-VALUE</b></code> evaluates its form each time it's evaluated.
+        </p>
+        <p>
+            Finally, <code><b>PROGV</b></code> creates new dynamic bindings for variables whose names are determined at runtime. This is mostly useful for implementing embedded interpreters for languages with dynamically scoped variables. The basic skeleton is as follows:
+        </p>
+        <pre>
+(progv <i>symbols-list</i> <i>values-list</i>
+  <i>body-form</i>*)
+</pre>
+        <p>
+            where <i>symbols-list</i> is a form that evaluates to a list of symbols and <i>values-list</i> is a form that evaluates to a list of values. Each symbol is dynamically bound to the corresponding value, and then the <i>body-forms</i> are evaluated. The difference between <code><b>PROGV</b></code> and <code><b>LET</b></code> is that because <i>symbols-list</i> is evaluated at runtime, the names of the variables to bind can be determined dynamically. As I say, this isn't something you need to do often.
+        </p>
+        <p>
+            And that's it for special operators. In the next chapter, I'll get back to hard-nosed practical topics and show you how to use Common Lisp's package system to take control of your namespaces so you can write libraries and applications that can coexist without stomping on each other's names.
+        </p>
+        <hr>
+        <div class="notes">
+            <p>
+                <sup>1</sup>Of course, if <code><b>IF</b></code> wasn't a special operator but some other conditional form, such as <code><b>COND</b></code>, was, you could build <code><b>IF</b></code> as a macro. Indeed, in many Lisp dialects, starting with McCarthy's original Lisp, <code><b>COND</b></code> was the primitive conditional evaluation operator.
+            </p>
+            <p>
+                <sup>2</sup>Well, technically those constructs could also expand into a <code><b>LAMBDA</b></code> expression since, as I mentioned in Chapter 6, <code><b>LET</b></code> could be defined--and was in some earlier Lisps--as a macro that expands into an invocation of an anonymous function.
+            </p>
+            <p>
+                <sup>3</sup>Surprising as it may seem, it actually is possible to make anonymous functions recurse. However, you must use a rather esoteric mechanism known as the <i>Y combinator</i>. But the Y combinator is an interesting theoretical result, not a practical programming tool, so is well outside the scope of this book.
+            </p>
+            <p>
+                <sup>4</sup>It's not required that <code><b>WITH-SLOTS</b></code> be implemented with <code><b>SYMBOL-MACROLET</b></code>--in some implementations, <code><b>WITH-SLOTS</b></code> may walk the code provided and generate an expansion with <code>x</code>, <code>y</code>, and <code>z</code> already replaced with the appropriate <code><b>SLOT-VALUE</b></code> forms. You can see how your implementation does it by evaluating this form:
+            </p>
+            <pre>
+(macroexpand-1 '(with-slots (x y z) obj (list x y z)))
+</pre>
+            <p>
+                However, walking the body is much easier for the Lisp implementation to do than for user code; to replace <code>x</code>, <code>y</code>, and <code>z</code> only when they appear in value positions requires a code walker that understands the syntax of all special operators and that recursively expands all macro forms in order to determine whether their expansions include the symbols in value positions. The Lisp implementation obviously has such a code walker at its disposal, but it's one of the few parts of Lisp that's not exposed to users of the language.
+            </p>
+            <p>
+                <sup>5</sup>One version of f2cl is available as part of the Common Lisp Open Code Collection (CLOCC): <code>http://clocc.sourceforge.net/</code>. By contrast, consider the tricks the authors of f2j, a FORTRAN-to-Java translator, have to play. Although the Java Virtual Machine (JVM) has a goto instruction, it's not directly exposed in Java. So to compile FORTRAN gotos, they first compile the FORTRAN code into legal Java source with calls to a dummy class to represent the labels and gotos. Then they compile the source with a regular Java compiler and postprocess the byte codes to translate the dummy calls into JVM-level byte codes. Clever, but what a pain.
+            </p>
+            <p>
+                <sup>6</sup>Since this algorithm depends on values returned by <code><b>RANDOM</b></code>, you may want to test it with a consistent random seed, which you can get by binding <code><b>*RANDOM-STATE*</b></code> to the value of <code>(make-random-state nil)</code> around each call to <code>algorithm-s</code>. For instance, you can do a basic sanity check of <code>algorithm-s</code> by evaluating this:
+            </p>
+            <pre>
+(let ((*random-state* (make-random-state nil))) (algorithm-s 10 200))
+</pre>
+            <p>
+                If your refactorings are all valid, this expression should evaluate to the same list each time.
+            </p>
+            <p>
+                <sup>7</sup>This is a pretty reasonable restriction--it's not entirely clear what it'd mean to return from a form that has already returned--unless, of course, you're a Scheme programmer. Scheme supports <i>continuations</i>, a language construct that makes it possible to return from the same function call more than once. But for a variety of reasons, few, if any, languages other than Scheme support this kind of continuation.
+            </p>
+            <p>
+                <sup>8</sup>If you're the kind of person who likes to know how things work all the way down to the bits, it may be instructive to think about how you might implement the condition system's macros using <code><b>BLOCK</b></code>, <code><b>TAGBODY</b></code>, closures, and dynamic variables.
+            </p>
+            <p>
+                <sup>9</sup><code><b>UNWIND-PROTECT</b></code> is essentially equivalent to <code>try/finally</code> constructs in Java and Python.
+            </p>
+            <p>
+                <sup>10</sup>And indeed, CLSQL, the multi-Lisp, multidatabase SQL interface library, provides a similar macro called <code>with-database</code>. CLSQL's home page is at <code>http://clsql.b9.com</code>.
+            </p>
+            <p>
+                <sup>11</sup>A small handful of macros don't pass through extra return values of the forms they evaluate. In particular, the <code><b>PROG1</b></code> macro, which evaluates a number of forms like a <code><b>PROGN</b></code> before returning the value of the first form, returns that form's primary value only. Likewise, <code><b>PROG2</b></code>, which returns the value of the second of its subforms, returns only the primary value. The special operator <code><b>MULTIPLE-VALUE-PROG1</b></code> is a variant of <code><b>PROG1</b></code> that returns all the values returned by the first form. It's a minor wart that <code><b>PROG1</b></code> doesn't already behave like <code><b>MULTIPLE-VALUE-PROG1</b></code>, but neither is used often enough that it matters much. The <code><b>OR</b></code> and <code><b>COND</b></code> macros are also not always transparent to multiple values, returning only the primary value of certain subforms.
+            </p>
+            <p>
+                <sup>12</sup>The reason loading a file with an <code><b>IN-PACKAGE</b></code> form in it has no effect on the value of <code><b>*PACKAGE*</b></code> after <code><b>LOAD</b></code> returns is because <code><b>LOAD</b></code> binds <code><b>*PACKAGE*</b></code> to its current value before doing anything else. In other words, something equivalent to the following <code><b>LET</b></code> is wrapped around the rest of the code in <code><b>LOAD</b></code>:
+            </p>
+            <pre>
+(let ((*package* *package*)) ...)
+</pre>
+            <p>
+                Any assignment to <code><b>*PACKAGE*</b></code> will be to the new binding, and the old binding will be restored when <code><b>LOAD</b></code> returns. It also binds the variable <code><b>*READTABLE*</b></code>, which I haven't discussed, in the same way.
+            </p>
+            <p>
+                <sup>13</sup>In some implementations, you may be able to get away with evaluating <code><b>DEFUN</b></code>s that use undefined macros in the function body as long as the macros are defined before the function is actually called. But that works, if at all, only when <code><b>LOAD</b></code>ing the definitions from source, not when compiling with <code><b>COMPILE-FILE</b></code>, so in general macro definitions must be evaluated before they're used.
+            </p>
+            <p>
+                <sup>14</sup>By contrast, the subforms in a top-level <code><b>LET</b></code> aren't compiled as top-level forms because they're not run directly when the FASL is loaded. They will run, but it's in the runtime context of the bindings established by the <code><b>LET</b></code>. Theoretically, a <code><b>LET</b></code> that binds no variables could be treated like a <code><b>PROGN</b></code>, but it's not--the forms appearing in a <code><b>LET</b></code> are never treated as top-level forms.
+            </p>
+            <p>
+                <sup>15</sup>The one declaration that has an effect on the semantics of a program is the <code><b>SPECIAL</b></code> declaration mentioned in Chapter 6.
+            </p>
+        </div>
+        <div class="copyright">
+            Copyright © 2003-2005, Peter Seibel
+        </div>
+    </body>
+</html>

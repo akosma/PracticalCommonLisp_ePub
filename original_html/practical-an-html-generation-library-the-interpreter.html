@@ -1,0 +1,610 @@
+<HTML><HEAD><TITLE>Practical: An HTML Generation Library, the Interpreter</TITLE><LINK REL="stylesheet" TYPE="text/css" HREF="style.css"/></HEAD><BODY><DIV CLASS="copyright">Copyright &copy; 2003-2005, Peter Seibel</DIV><H1>30. Practical: An HTML Generation Library, the Interpreter</H1><P>In this chapter and the next you'll take a look under the hood of the
+FOO HTML generator that you've been using in the past few chapters.
+FOO is an example of a kind of programming that's quite common in
+Common Lisp and relatively uncommon in non-Lisp languages, namely,
+<I>language-oriented</I> programming. Rather than provide an API built
+primarily out of functions, classes, and macros, FOO provides language
+processors for a domain-specific language that you can embed in your
+Common Lisp programs.</P><P>FOO provides two language processors for the same s-expression
+language. One is an interpreter that takes a FOO &quot;program&quot; as data
+and interprets it to generate HTML. The other is a compiler that
+compiles FOO expressions, possibly with embedded Common Lisp code,
+into Common Lisp that generates HTML and runs the embedded code. The
+interpreter is exposed as the function <CODE>emit-html</CODE> and the
+compiler as the macro <CODE>html</CODE>, which you used in previous
+chapters.</P><P>In this chapter you'll look at some of the infrastructure shared
+between the interpreter and the compiler and then at the
+implementation of the interpreter. In the next chapter, I'll show you
+how the compiler works.</P><A NAME="designing-a-domain-specific-language"><H2>Designing a Domain-Specific Language</H2></A><P>Designing an embedded language requires two steps: first, design the
+language that'll allow you to express the things you want to express,
+and second, implement a processor, or processors, that accepts a
+&quot;program&quot; in that language and either performs the actions indicated
+by the program or translates the program into Common Lisp code
+that'll perform equivalent behaviors.</P><P>So, step one is to design the HTML-generating language. The key to
+designing a good domain-specific language is to strike the right
+balance between expressiveness and concision. For instance, a highly
+expressive but not very concise &quot;language&quot; for generating HTML is the
+language of literal HTML strings. The legal &quot;forms&quot; of this language
+are strings containing literal HTML. Language processors for this
+&quot;language&quot; could process such forms by simply emitting them as-is.</P><PRE>(defvar *html-output* *standard-output*)
+
+(defun emit-html (html)
+  &quot;An interpreter for the literal HTML language.&quot;
+  (write-sequence html *html-output*))
+
+(defmacro html (html)
+  &quot;A compiler for the literal HTML language.&quot;
+  `(write-sequence ,html *html-output*))</PRE><P>This &quot;language&quot; is highly expressive since it can express <I>any</I>
+HTML you could possibly want to generate.<SUP>1</SUP> On the other hand, this language doesn't win a lot of
+points for its concision because it gives you zero compression--its
+input <I>is</I> its output.</P><P>To design a language that gives you some useful compression without
+sacrificing too much expressiveness, you need to identify the details
+of the output that are either redundant or uninteresting. You can
+then make those aspects of the output implicit in the semantics of
+the language.</P><P>For instance, because of the structure of HTML, every opening tag is
+paired with a matching closing tag.<SUP>2</SUP> When you write
+HTML by hand, you have to write those closing tags, but you can
+improve the concision of your HTML-generating language by making the
+closing tags implicit.</P><P>Another way you can gain concision at a slight cost in expressiveness
+is to make the language processors responsible for adding appropriate
+whitespace between elements--blank lines and indentation. When you're
+generating HTML programmatically, you typically don't care much about
+which elements have line breaks before or after them or about whether
+different elements are indented relative to their parent elements.
+Letting the language processor insert whitespace according to some
+rule means you don't have to worry about it. As it turns out, FOO
+actually supports two modes--one that uses the minimum amount of
+whitespace, which allows it to generate extremely efficient code and
+compact HTML, and another that generates nicely formatted HTML with
+different elements indented and separated from other elements
+according to their role.</P><P>Another detail that's best moved into the language processor is the
+escaping of certain characters that have a special meaning in HTML
+such as <CODE>&lt;</CODE>, <CODE>&gt;</CODE>, and <CODE>&amp;</CODE>. Obviously, if you generate
+HTML by just printing strings to a stream, then it's up to you to
+replace any occurrences of those characters in the string with the
+appropriate escape sequences, <CODE>&amp;lt;</CODE>, <CODE>&amp;gt;</CODE> and
+<CODE>&amp;amp;</CODE>. But if the language processor can know which strings
+are to be emitted as element data, then it can take care of
+automatically escaping those characters for you.</P><A NAME="the-foo-language"><H2>The FOO Language</H2></A><P>So, enough theory. I'll give you a quick overview of the language
+implemented by FOO, and then you'll look at the implementation of the
+two FOO language processors--the interpreter, in this chapter, and
+the compiler, in the next.</P><P>Like Lisp itself, the basic syntax of the FOO language is defined in
+terms of forms made up of Lisp objects. The language defines how each
+legal FOO form is translated into HTML.</P><P>The simplest FOO forms are self-evaluating Lisp objects such as
+strings, numbers, and keyword symbols.<SUP>3</SUP> You'll need a function <CODE>self-evaluating-p</CODE> that
+tests whether a given object is self-evaluating for FOO's purposes.</P><PRE>(defun self-evaluating-p (form)
+  (and (atom form) (if (symbolp form) (keywordp form) t)))</PRE><P>Objects that satisfy this predicate will be emitted by converting
+them to strings with <CODE><B>PRINC-TO-STRING</B></CODE> and then escaping any
+reserved characters, such as <CODE>&lt;</CODE>, <CODE>&gt;</CODE>, or <CODE>&amp;</CODE>. When
+the value is being emitted as an attribute, the characters <CODE>&quot;</CODE>,
+and <CODE>'</CODE> are also escaped. Thus, you can invoke the <CODE>html</CODE>
+macro on a self-evaluating object to emit it to <CODE>*html-output*</CODE>
+(which is initially bound to <CODE><B>*STANDARD-OUTPUT*</B></CODE>). Table 30-1
+shows how a few different self-evaluating values will be output.</P><P><DIV CLASS="table-caption">Table 30-1. FOO Output for Self-Evaluating Objects</DIV></P><TABLE CLASS="book-table"><TR><TD>FOO Form</TD><TD>Generated HTML</TD></TR><TR><TD><CODE>&quot;foo&quot;</CODE></TD><TD><CODE>foo</CODE></TD></TR><TR><TD><CODE>10</CODE></TD><TD><CODE>10</CODE></TD></TR><TR><TD><CODE>:foo</CODE></TD><TD><CODE>FOO</CODE></TD></TR><TR><TD><CODE>&quot;foo &amp; bar&quot;</CODE></TD><TD><CODE>foo &amp;amp; bar</CODE></TD></TR></TABLE><P>Of course, most HTML consists of tagged elements. The three pieces of
+information that describe each element are the tag, a set of
+attributes, and a body containing text and/or more HTML elements.
+Thus, you need a way to represent these three pieces of information
+as Lisp objects, preferably ones that the Lisp reader already knows
+how to read.<SUP>4</SUP> If you forget about attributes for a moment, there's an
+obvious mapping between Lisp lists and HTML elements: any HTML
+element can be represented by a list whose <CODE><B>FIRST</B></CODE> is a symbol
+where the name is the name of the element's tag and whose <CODE><B>REST</B></CODE>
+is a list of self-evaluating objects or lists representing other HTML
+elements. Thus:</P><PRE>&lt;p&gt;Foo&lt;/p&gt; &lt;==&gt; (:p &quot;Foo&quot;)
+
+&lt;p&gt;&lt;i&gt;Now&lt;/i&gt; is the time&lt;/p&gt; &lt;==&gt; (:p (:i &quot;Now&quot;) &quot; is the time&quot;)</PRE><P>Now the only problem is where to squeeze in the attributes. Since
+most elements have no attributes, it'd be nice if you could use the
+preceding syntax for elements without attributes. FOO provides two
+ways to notate elements with attributes. The first is to simply
+include the attributes in the list immediately following the symbol,
+alternating keyword symbols naming the attributes and objects
+representing the attribute value forms. The body of the element
+starts with the first item in the list that's in a position to be an
+attribute name and isn't a keyword symbol. Thus:</P><PRE>HTML&gt; (html (:p &quot;foo&quot;))
+&lt;p&gt;foo&lt;/p&gt;
+NIL
+HTML&gt; (html (:p &quot;foo &quot; (:i &quot;bar&quot;) &quot; baz&quot;))
+&lt;p&gt;foo &lt;i&gt;bar&lt;/i&gt; baz&lt;/p&gt;
+NIL
+HTML&gt; (html (:p :style &quot;foo&quot; &quot;Foo&quot;))
+&lt;p style='foo'&gt;Foo&lt;/p&gt;
+NIL
+HTML&gt; (html (:p :id &quot;x&quot; :style &quot;foo&quot; &quot;Foo&quot;))
+&lt;p id='x' style='foo'&gt;Foo&lt;/p&gt;
+NIL</PRE><P>For folks who prefer a bit more obvious delineation between the
+element's attributes and its body, FOO supports an alternative
+syntax: if the first element of a list is itself a list with a
+keyword as <I>its</I> first element, then the outer list represents an
+HTML element with that keyword indicating the tag, with the <CODE><B>REST</B></CODE>
+of the nested list as the attributes, and with the <CODE><B>REST</B></CODE> of the
+outer list as the body. Thus, you could write the previous two
+expressions like this:</P><PRE>HTML&gt; (html ((:p :style &quot;foo&quot;) &quot;Foo&quot;))
+&lt;p style='foo'&gt;Foo&lt;/p&gt;
+NIL
+HTML&gt; (html ((:p :id &quot;x&quot; :style &quot;foo&quot;) &quot;Foo&quot;))
+&lt;p id='x' style='foo'&gt;Foo&lt;/p&gt;
+NIL</PRE><P>The following function tests whether a given object matches either of
+these syntaxes:</P><PRE>(defun cons-form-p (form &amp;optional (test #'keywordp))
+  (and (consp form)
+       (or (funcall test (car form))
+           (and (consp (car form)) (funcall test (caar form))))))</PRE><P>You should parameterize the <CODE>test</CODE> function because later you'll
+need to test the same two syntaxes with a slightly different predicate
+on the name.</P><P>To completely abstract the differences between the two syntax
+variants, you can define a function, <CODE>parse-cons-form</CODE>, that
+takes a form and parses it into three elements, the tag, the
+attributes plist, and the body list, returning them as multiple
+values. The code that actually evaluates cons forms will use this
+function and not have to worry about which syntax was used.</P><PRE>(defun parse-cons-form (sexp)
+  (if (consp (first sexp))
+    (parse-explicit-attributes-sexp sexp)
+    (parse-implicit-attributes-sexp sexp)))
+
+(defun parse-explicit-attributes-sexp (sexp)
+  (destructuring-bind ((tag &amp;rest attributes) &amp;body body) sexp
+    (values tag attributes body)))
+
+(defun parse-implicit-attributes-sexp (sexp)
+  (loop with tag = (first sexp)
+     for rest on (rest sexp) by #'cddr
+     while (and (keywordp (first rest)) (second rest))
+     when (second rest)
+       collect (first rest) into attributes and
+       collect (second rest) into attributes
+     end
+     finally (return (values tag attributes rest))))</PRE><P>Now that you have the basic language specified, you can think about
+how you're actually going to implement the language processors. How
+do you get from a series of FOO forms to the desired HTML? As I
+mentioned previously, you'll be implementing two language processors
+for FOO: an interpreter that walks a tree of FOO forms and emits the
+corresponding HTML directly and a compiler that walks a tree and
+translates it into Common Lisp code that'll emit the same HTML. Both
+the interpreter and compiler will be built on top of a common
+foundation of code, which provides support for things such as
+escaping reserved characters and generating nicely indented output,
+so it makes sense to start there.</P><A NAME="character-escaping"><H2>Character Escaping</H2></A><P>The first bit of the foundation you'll need to lay is the code that
+knows how to escape characters with a special meaning in HTML. There
+are three such characters, and they must not appear in the text of an
+element or in an attribute value; they are <CODE>&lt;</CODE>, <CODE>&gt;</CODE>, and
+<CODE>&amp;</CODE>. In element text or attribute values, these characters must
+be replaced with the <I>character reference entities</I> <CODE>&amp;lt;</CODE>,
+<CODE>&amp;gt</CODE>;, and <CODE>&amp;amp;</CODE>. Similarly, in attribute values, the
+quotation marks used to delimit the value must be escaped, <CODE>'</CODE>
+with <CODE>&amp;apos;</CODE> and <CODE>&quot;</CODE> with <CODE>&amp;quot;</CODE>. Additionally, any
+character can be represented by a numeric character reference entity
+consisting of an ampersand, followed by a sharp sign, followed by the
+numeric code as a base 10 integer, and followed by a semicolon. These
+numeric escapes are sometimes used to embed non-ASCII characters in
+HTML.</P><DIV CLASS="sidebarhead">The Package</DIV><DIV CLASS="sidebar"><P>Since FOO is a low-level library, the package you develop it
+in doesn't rely on much external code--just the usual dependency on
+names from the <CODE>COMMON-LISP</CODE> package and, almost as usual, on
+the names of the macro-writing macros from
+<CODE>COM.GIGAMONKEYS.MACRO-UTILITIES</CODE>. On the other hand, the
+package needs to export all the names needed by code that uses FOO.
+Here's the <CODE><B>DEFPACKAGE</B></CODE> from the source that you can download from
+the book's Web site:</P><PRE>(defpackage :com.gigamonkeys.html
+  (:use :common-lisp :com.gigamonkeys.macro-utilities)
+  (:export :with-html-output
+           :in-html-style
+           :define-html-macro
+           :html
+           :emit-html
+           :&amp;attributes))</PRE></DIV><P>The following function accepts a single character and returns a string
+containing a character reference entity for that character:</P><PRE>(defun escape-char (char)
+  (case char
+    (#\&amp; &quot;&amp;amp;&quot;)
+    (#\&lt; &quot;&amp;lt;&quot;)
+    (#\&gt; &quot;&amp;gt;&quot;)
+    (#\' &quot;&amp;apos;&quot;)
+    (#\&quot; &quot;&amp;quot;&quot;)
+    (t (format nil &quot;&amp;#~d;&quot; (char-code char)))))</PRE><P>You can use this function as the basis for a function, <CODE>escape</CODE>,
+that takes a string and a sequence of characters and returns a copy of
+the first argument with all occurrences of the characters in the
+second argument replaced with the corresponding character entity
+returned by <CODE>escape-char</CODE>.</P><PRE>(defun escape (in to-escape)
+  (flet ((needs-escape-p (char) (find char to-escape)))
+    (with-output-to-string (out)
+      (loop for start = 0 then (1+ pos)
+            for pos = (position-if #'needs-escape-p in :start start)
+            do (write-sequence in out :start start :end pos)
+            when pos do (write-sequence (escape-char (char in pos)) out)
+            while pos))))</PRE><P>You can also define two parameters: <CODE>*element-escapes*</CODE>, which
+contains the characters you need to escape in normal element data,
+and <CODE>*attribute-escapes*</CODE>, which contains the set of characters
+to be escaped in attribute values.</P><PRE>(defparameter *element-escapes* &quot;&lt;&gt;&amp;&quot;)
+(defparameter *attribute-escapes* &quot;&lt;&gt;&amp;\&quot;'&quot;)</PRE><P>Here are some examples:</P><PRE>HTML&gt; (escape &quot;foo &amp; bar&quot; *element-escapes*)
+&quot;foo &amp;amp; bar&quot;
+HTML&gt; (escape &quot;foo &amp; 'bar'&quot; *element-escapes*)
+&quot;foo &amp;amp; 'bar'&quot;
+HTML&gt; (escape &quot;foo &amp; 'bar'&quot; *attribute-escapes*)
+&quot;foo &amp;amp; &amp;apos;bar&amp;apos;&quot;</PRE><P>Finally, you'll need a variable, <CODE>*escapes*</CODE>, that will be bound
+to the set of characters that need to be escaped. It's initially set
+to the value of <CODE>*element-escapes*</CODE>, but when generating
+attributes, it will, as you'll see, be rebound to the value of
+<CODE>*attribute-escapes*</CODE>.</P><PRE>(defvar *escapes* *element-escapes*)</PRE><A NAME="indenting-printer"><H2>Indenting Printer</H2></A><P>To handle generating nicely indented output, you can define a class
+<CODE>indenting-printer</CODE>, which wraps around an output stream, and
+functions that use an instance of that class to emit strings to the
+stream while keeping track of when it's at the beginning of the line.
+The class looks like this:</P><PRE>(defclass indenting-printer ()
+  ((out                 :accessor out                 :initarg :out)
+   (beginning-of-line-p :accessor beginning-of-line-p :initform t)
+   (indentation         :accessor indentation         :initform 0)
+   (indenting-p         :accessor indenting-p         :initform t)))</PRE><P>The main function that operates on <CODE>indenting-printer</CODE>s is
+<CODE>emit</CODE>, which takes the printer and a string and emits the
+string to the printer's output stream, keeping track of when it emits
+a newline so it can reset the <CODE>beginning-of-line-p</CODE> slot.</P><PRE>(defun emit (ip string)
+  (loop for start = 0 then (1+ pos)
+     for pos = (position #\Newline string :start start)
+     do (emit/no-newlines ip string :start start :end pos)
+     when pos do (emit-newline ip)
+     while pos))</PRE><P>To actually emit the string, it uses the function
+<CODE>emit/no-newlines</CODE>, which emits any needed indentation, via the
+helper <CODE>indent-if-necessary</CODE>, and then writes the string to the
+stream. This function can also be called directly by other code to
+emit a string that's known not to contain any newlines.</P><PRE>(defun emit/no-newlines (ip string &amp;key (start 0) end)
+  (indent-if-necessary ip)
+  (write-sequence string (out ip) :start start :end end)
+  (unless (zerop (- (or end (length string)) start))
+    (setf (beginning-of-line-p ip) nil)))</PRE><P>The helper <CODE>indent-if-necessary</CODE> checks
+<CODE>beginning-of-line-p</CODE> and <CODE>indenting-p</CODE> to determine
+whether it needs to emit indentation and, if they're both true, emits
+as many spaces as indicated by the value of <CODE>indentation</CODE>. Code
+that uses the <CODE>indenting-printer</CODE> can control the indentation by
+manipulating the <CODE>indentation</CODE> and <CODE>indenting-p</CODE> slots.
+Incrementing and decrementing <CODE>indentation</CODE> changes the number
+of leading spaces, while setting <CODE>indenting-p</CODE> to <CODE><B>NIL</B></CODE> can
+temporarily turn off indentation.</P><PRE>(defun indent-if-necessary (ip)
+  (when (and (beginning-of-line-p ip) (indenting-p ip))
+    (loop repeat (indentation ip) do (write-char #\Space (out ip)))
+    (setf (beginning-of-line-p ip) nil)))</PRE><P>The last two functions in the <CODE>indenting-printer</CODE> API are
+<CODE>emit-newline</CODE> and <CODE>emit-freshline</CODE>, which are both used to
+emit a newline character, similar to the <CODE>~%</CODE> and <CODE>~&amp;</CODE>
+<CODE><B>FORMAT</B></CODE> directives. That is, the only difference is that
+<CODE>emit-newline</CODE> always emits a newline, while
+<CODE>emit-freshline</CODE> does so only if <CODE>beginning-of-line-p</CODE> is
+false. Thus, multiple calls to <CODE>emit-freshline</CODE> without any
+intervening <CODE>emit</CODE>s won't result in a blank line. This is handy
+when one piece of code wants to generate some output that should end
+with a newline while another piece of code wants to generate some
+output that should start on a newline but you don't want a blank line
+between the two bits of output.</P><PRE>(defun emit-newline (ip)
+  (write-char #\Newline (out ip))
+  (setf (beginning-of-line-p ip) t))
+
+(defun emit-freshline (ip)
+  (unless (beginning-of-line-p ip) (emit-newline ip)))</PRE><P>With those preliminaries out of the way, you're ready to get to the
+guts of the FOO processor.</P><A NAME="html-processor-interface"><H2>HTML Processor Interface</H2></A><P>Now you're ready to define the interface that'll be used by the FOO
+language processor to emit HTML. You can define this interface as a
+set of generic functions because you'll need two implementations--one
+that actually emits HTML and another that the <CODE>html</CODE> macro can
+use to collect a list of actions that need to be performed, which can
+then be optimized and compiled into code that emits the same output
+in a more efficient way. I'll call this set of generic functions the
+<I>backend interface</I>. It consists of the following eight generic
+functions:</P><PRE>(defgeneric raw-string (processor string &amp;optional newlines-p))
+
+(defgeneric newline (processor))
+
+(defgeneric freshline (processor))
+
+(defgeneric indent (processor))
+
+(defgeneric unindent (processor))
+
+(defgeneric toggle-indenting (processor))
+
+(defgeneric embed-value (processor value))
+
+(defgeneric embed-code (processor code))</PRE><P>While several of these functions have obvious correspondence to
+<CODE>indenting-printer</CODE> functions, it's important to understand that
+these generic functions define the abstract operations that are used by
+the FOO language processors and won't always be implemented in terms
+of calls to the <CODE>indenting-printer</CODE> functions.</P><P>That said, perhaps the easiest way to understand the semantics of
+these abstract operations is to look at the concrete implementations
+of the methods specialized on <CODE>html-pretty-printer</CODE>, the class
+used to generate human-readable HTML.</P><A NAME="the-pretty-printer-backend"><H2>The Pretty Printer Backend</H2></A><P>You can start by defining a class with two slots--one to hold an
+instance of <CODE>indenting-printer</CODE> and one to hold the tab
+width--the number of spaces you want to increase the indentation for
+each level of nesting of HTML elements.</P><PRE>(defclass html-pretty-printer ()
+  ((printer   :accessor printer   :initarg :printer)
+   (tab-width :accessor tab-width :initarg :tab-width :initform 2)))</PRE><P>Now you can implement methods specialized on
+<CODE>html-pretty-printer</CODE> on the eight generic functions that make up
+the backend interface.</P><P>The FOO processors use the <CODE>raw-string</CODE> function to emit strings
+that don't need character escaping, either because you actually want
+to emit normally reserved characters or because all reserved
+characters have already been escaped. Usually <CODE>raw-string</CODE> is
+invoked with strings that don't contain newlines, so the default
+behavior is to use <CODE>emit/no-newlines</CODE> unless the caller
+specifies a non-<CODE><B>NIL</B></CODE> <CODE>newlines-p</CODE> argument.</P><PRE>(defmethod raw-string ((pp html-pretty-printer) string &amp;optional newlines-p)
+  (if newlines-p
+    (emit (printer pp) string)
+    (emit/no-newlines (printer pp) string)))</PRE><P>The functions <CODE>newline</CODE>, <CODE>freshline</CODE>, <CODE>indent</CODE>,
+<CODE>unindent</CODE>, and <CODE>toggle-indenting</CODE> implement fairly
+straightforward manipulations of the underlying
+<CODE>indenting-printer</CODE>. The only wrinkle is that the HTML pretty
+printer generates pretty output only when the dynamic variable
+<CODE>*pretty*</CODE> is true. When it's <CODE><B>NIL</B></CODE>, you should generate
+compact HTML with no unnecessary whitespace. So, these methods, with
+the exception of <CODE>newline</CODE>, all check <CODE>*pretty*</CODE> before
+doing anything:<SUP>5</SUP></P><PRE>(defmethod newline ((pp html-pretty-printer))
+  (emit-newline (printer pp)))
+
+(defmethod freshline ((pp html-pretty-printer))
+  (when *pretty* (emit-freshline (printer pp))))
+
+(defmethod indent ((pp html-pretty-printer))
+  (when *pretty* 
+    (incf (indentation (printer pp)) (tab-width pp))))
+
+(defmethod unindent ((pp html-pretty-printer))
+  (when *pretty* 
+    (decf (indentation (printer pp)) (tab-width pp))))
+
+(defmethod toggle-indenting ((pp html-pretty-printer))
+  (when *pretty* 
+    (with-slots (indenting-p) (printer pp)
+      (setf indenting-p (not indenting-p)))))</PRE><P>Finally, the functions <CODE>embed-value</CODE> and <CODE>embed-code</CODE> are
+used only by the FOO compiler--<CODE>embed-value</CODE> is used to
+generate code that'll emit the value of a Common Lisp expression,
+while <CODE>embed-code</CODE> is used to embed a bit of code to be run and
+its result discarded. In the interpreter, you can't meaningfully
+evaluate embedded Lisp code, so the methods on these functions always
+signal an error.</P><PRE>(defmethod embed-value ((pp html-pretty-printer) value)
+  (error &quot;Can't embed values when  interpreting. Value: ~s&quot; value))
+
+(defmethod embed-code ((pp html-pretty-printer) code)
+  (error &quot;Can't embed code when interpreting. Code: ~s&quot; code))</PRE><DIV CLASS="sidebarhead">Using Conditions to Have Your Cake and Eat It Too</DIV><DIV CLASS="sidebar"><P>An alternate approach would be to use <CODE><B>EVAL</B></CODE> to evaluate
+Lisp expressions in the interpreter. The problem with this approach
+is that <CODE><B>EVAL</B></CODE> has no access to the lexical environment. Thus,
+there's no way to make something like this work:</P><PRE>(let ((x 10)) (emit-html '(:p x)))</PRE><P>when <CODE>x</CODE> is a lexical variable. The symbol <CODE>x</CODE> that's passed
+to <CODE>emit-html</CODE> at runtime has no particular connection to the
+lexical variable named with the same symbol. The Lisp compiler
+arranges for references to <CODE>x</CODE> in the code to refer to the
+variable, but after the code is compiled, there's no longer
+necessarily any association between the name <CODE>x</CODE> and that
+variable. This is the main reason that when you think <CODE><B>EVAL</B></CODE> is
+the solution to your problem, you're probably wrong.</P><P>However, if <CODE>x</CODE> was a dynamic variable, declared with
+<CODE><B>DEFVAR</B></CODE> or <CODE><B>DEFPARAMETER</B></CODE> (and likely named <CODE>*x*</CODE> instead
+of <CODE>x</CODE>), <CODE><B>EVAL</B></CODE> could get at its value. Thus, it might be
+useful to allow the FOO interpreter to use <CODE><B>EVAL</B></CODE> in some
+situations. But it's a bad idea to always use <CODE><B>EVAL</B></CODE>. You can get
+the best of both worlds by combining the idea of using <CODE><B>EVAL</B></CODE> with
+the condition system.</P><P>First define some error classes that you can signal when
+<CODE>embed-value</CODE> and <CODE>embed-code</CODE> are called in the
+interpreter.</P><PRE>(define-condition embedded-lisp-in-interpreter (error)
+  ((form :initarg :form :reader form)))</PRE><PRE>(define-condition value-in-interpreter (embedded-lisp-in-interpreter) ()
+  (:report
+   (lambda (c s) 
+     (format s &quot;Can't embed values when interpreting. Value: ~s&quot; (form c)))))</PRE><PRE>(define-condition code-in-interpreter (embedded-lisp-in-interpreter) ()
+  (:report
+   (lambda (c s) 
+     (format s &quot;Can't embed code when interpreting. Code: ~s&quot; (form c)))))</PRE><P>Now you can implement <CODE>embed-value</CODE> and <CODE>embed-code</CODE> to
+signal those errors <I>and</I> provide a restart that'll evaluate the
+form with <CODE><B>EVAL</B></CODE>.</P><PRE>(defmethod embed-value ((pp html-pretty-printer) value)
+  (restart-case (error 'value-in-interpreter :form value)
+    (evaluate ()
+      :report (lambda (s) (format s &quot;EVAL ~s in null lexical environment.&quot; value))
+      (raw-string pp (escape (princ-to-string (eval value)) *escapes*) t))))</PRE><PRE>(defmethod embed-code ((pp html-pretty-printer) code)
+  (restart-case (error 'code-in-interpreter :form code)
+    (evaluate ()
+      :report (lambda (s) (format s &quot;EVAL ~s in null lexical environment.&quot; code))
+      (eval code))))</PRE><P>Now you can do something like this:</P><PRE>HTML&gt; (defvar *x* 10)
+*X*
+HTML&gt; (emit-html '(:p *x*))</PRE><P>and you'll get dropped into the debugger with this message:</P><PRE>Can't embed values when interpreting. Value: *X*
+   [Condition of type VALUE-IN-INTERPRETER]</PRE><PRE>Restarts:
+  0: [EVALUATE] EVAL *X* in null lexical environment.
+  1: [ABORT] Abort handling SLIME request.
+  2: [ABORT] Abort entirely from this process.</PRE><P>If you invoke the <CODE>evaluate</CODE> restart, <CODE>embed-value</CODE> will
+<CODE><B>EVAL</B></CODE> <CODE>*x*</CODE>, get the value <CODE>10</CODE>, and generate this
+HTML:</P><PRE>&lt;p&gt;10&lt;/p&gt;</PRE><P>Then, as a convenience, you can provide restart functions--functions
+that invoke the <CODE>evaluate</CODE> restart--in certain situations. The
+<CODE>evaluate</CODE> restart function unconditionally invokes the restart,
+while <CODE>eval-dynamic-variables</CODE> and <CODE>eval-code</CODE> invoke it
+only if the form in the condition is a dynamic variable or potential
+code.</P><PRE>(defun evaluate (&amp;optional condition)
+  (declare (ignore condition))
+  (invoke-restart 'evaluate))</PRE><PRE>(defun eval-dynamic-variables (&amp;optional condition)
+  (when (and (symbolp (form condition)) (boundp (form condition)))
+    (evaluate)))</PRE><PRE>(defun eval-code (&amp;optional condition)
+  (when (consp (form condition))
+    (evaluate)))</PRE><P>Now you can use <CODE><B>HANDLER-BIND</B></CODE> to set up a handler to
+automatically invoke the <CODE>evaluate</CODE> restart for you.</P><PRE>HTML&gt; (handler-bind ((value-in-interpreter #'evaluate)) (emit-html '(:p *x*)))
+&lt;p&gt;10&lt;/p&gt;
+T</PRE><P>Finally, you can define a macro to provide a nicer syntax for binding
+handlers for the two kinds of errors.</P><PRE>(defmacro with-dynamic-evaluation ((&amp;key values code) &amp;body body)
+  `(handler-bind (
+       ,@(if values `((value-in-interpreter #'evaluate)))
+       ,@(if code `((code-in-interpreter #'evaluate))))
+     ,@body))</PRE><P>With this macro defined, you can write this:</P><PRE>HTML&gt; (with-dynamic-evaluation (:values t) (emit-html '(:p *x*)))
+&lt;p&gt;10&lt;/p&gt;
+T</PRE></DIV><A NAME="the-basic-evaluation-rule"><H2>The Basic Evaluation Rule</H2></A><P>Now to connect the FOO language to the processor interface, all you
+need is a function that takes an object and processes it, invoking
+the appropriate processor functions to generate HTML. For instance,
+when given a simple form like this:</P><PRE>(:p &quot;Foo&quot;)</PRE><P>this function might execute this sequence of calls on the processor:</P><PRE>(freshline processor)
+(raw-string processor &quot;&lt;p&quot; nil)
+(raw-string processor &quot;&gt;&quot; nil)
+(raw-string processor &quot;Foo&quot; nil)
+(raw-string processor &quot;&lt;/p&gt;&quot; nil)
+(freshline processor)</PRE><P>For now you can define a simple function that just checks whether a
+form is, in fact, a legal FOO form and, if it is, hands it off to the
+function <CODE>process-sexp-html</CODE> for processing. In the next
+chapter, you'll add some bells and whistles to this function to allow
+it to handle macros and special operators. But for now it looks like
+this:</P><PRE>(defun process (processor form)
+  (if (sexp-html-p form)
+    (process-sexp-html processor form)
+    (error &quot;Malformed FOO form: ~s&quot; form)))</PRE><P>The function <CODE>sexp-html-p</CODE> determines whether the given object
+is a legal FOO expression, either a self-evaluating form or a
+properly formatted cons.</P><PRE>(defun sexp-html-p (form)
+  (or (self-evaluating-p form) (cons-form-p form)))</PRE><P>Self-evaluating forms are easily handled: just convert to a string
+with <CODE><B>PRINC-TO-STRING</B></CODE> and escape the characters in the variable
+<CODE>*escapes*</CODE>, which, as you'll recall, is initially bound to the
+value of <CODE>*element-escapes*</CODE>. Cons forms you pass off to
+<CODE>process-cons-sexp-html</CODE>.</P><PRE>(defun process-sexp-html (processor form)
+  (if (self-evaluating-p form)
+    (raw-string processor (escape (princ-to-string form) *escapes*) t)
+    (process-cons-sexp-html processor form)))</PRE><P>The function <CODE>process-cons-sexp-html</CODE> is then responsible for
+emitting the opening tag, any attributes, the body, and the closing
+tag. The main complication here is that to generate pretty HTML, you
+need to emit fresh lines and adjust the indentation according to the
+type of the element being emitted. You can categorize all the
+elements defined in HTML into one of three categories: block,
+paragraph, and inline. Block elements--such as <CODE>body</CODE> and
+<CODE>ul</CODE>--are emitted with fresh lines before and after both their
+opening and closing tags and with their contents indented one level.
+Paragraph elements--such as <CODE>p</CODE>, <CODE>li</CODE>, and
+<CODE>blockquote</CODE>--are emitted with a fresh line before the opening
+tag and after the closing tag. Inline elements are simply emitted in
+line. The following three parameters list the elements of each type:</P><PRE>(defparameter *block-elements*
+  '(:body :colgroup :dl :fieldset :form :head :html :map :noscript :object
+    :ol :optgroup :pre :script :select :style :table :tbody :tfoot :thead
+    :tr :ul))
+
+(defparameter *paragraph-elements*
+  '(:area :base :blockquote :br :button :caption :col :dd :div :dt :h1
+    :h2 :h3 :h4 :h5 :h6 :hr :input :li :link :meta :option :p :param
+    :td :textarea :th :title))
+
+(defparameter *inline-elements*
+  '(:a :abbr :acronym :address :b :bdo :big :cite :code :del :dfn :em
+    :i :img :ins :kbd :label :legend :q :samp :small :span :strong :sub
+    :sup :tt :var))</PRE><P>The functions <CODE>block-element-p</CODE> and <CODE>paragraph-element-p</CODE>
+test whether a given tag is a member of the corresponding
+list.<SUP>6</SUP></P><PRE>(defun block-element-p (tag) (find tag *block-elements*))
+
+(defun paragraph-element-p (tag) (find tag *paragraph-elements*))</PRE><P>Two other categorizations with their own predicates are the elements
+that are always empty, such as <CODE>br</CODE> and <CODE>hr</CODE>, and the three
+elements, <CODE>pre</CODE>, <CODE>style</CODE>, and <CODE>script</CODE>, in which
+whitespace is supposed to be preserved. The former are handled
+specially when generating regular HTML (in other words, not XHTML)
+since they're not supposed to have a closing tag. And when emitting
+the three tags in which whitespace is preserved, you can temporarily
+turn off indentation so the pretty printer doesn't add any spaces
+that aren't part of the element's actual contents.</P><PRE>(defparameter *empty-elements*
+  '(:area :base :br :col :hr :img :input :link :meta :param))
+
+(defparameter *preserve-whitespace-elements* '(:pre :script :style))
+
+(defun empty-element-p (tag) (find tag *empty-elements*))
+
+(defun preserve-whitespace-p (tag) (find tag *preserve-whitespace-elements*))</PRE><P>The last piece of information you need when generating HTML is
+whether you're generating XHTML since that affects how you emit empty
+elements.</P><PRE>(defparameter *xhtml* nil)</PRE><P>With all that information, you're ready to process a cons FOO form.
+You use <CODE>parse-cons-form</CODE> to parse the list into three parts, the
+tag symbol, a possibly empty plist of attribute key/value pairs, and a
+possibly empty list of body forms. You then emit the opening tag, the
+body, and the closing tag with the helper functions
+<CODE>emit-open-tag</CODE>, <CODE>emit-element-body</CODE>, and
+<CODE>emit-close-tag</CODE>.</P><PRE>(defun process-cons-sexp-html (processor form)
+  (when (string= *escapes* *attribute-escapes*)
+    (error &quot;Can't use cons forms in attributes: ~a&quot; form))
+  (multiple-value-bind (tag attributes body) (parse-cons-form form)
+    (emit-open-tag     processor tag body attributes)
+    (emit-element-body processor tag body)
+    (emit-close-tag    processor tag body)))</PRE><P>In <CODE>emit-open-tag</CODE> you have to call <CODE>freshline</CODE> when
+appropriate and then emit the attributes with <CODE>emit-attributes</CODE>.
+You need to pass the element's body to <CODE>emit-open-tag</CODE> so when
+it's emitting XHTML, it knows whether to finish the tag with
+<CODE>/&gt;</CODE> or <CODE>&gt;</CODE>.</P><PRE>(defun emit-open-tag (processor tag body-p attributes)
+  (when (or (paragraph-element-p tag) (block-element-p tag))
+    (freshline processor))
+  (raw-string processor (format nil &quot;&lt;~(~a~)&quot; tag))
+  (emit-attributes processor attributes)
+  (raw-string processor (if (and *xhtml* (not body-p)) &quot;/&gt;&quot; &quot;&gt;&quot;)))</PRE><P>In <CODE>emit-attributes</CODE> the attribute names aren't evaluated since
+they must be keyword symbols, but you should invoke the top-level
+<CODE>process</CODE> function to evaluate the attribute values, binding
+<CODE>*escapes*</CODE> to <CODE>*attribute-escapes*</CODE>. As a convenience for
+specifying boolean attributes, whose value should be the name of the
+attribute, if the value is <CODE><B>T</B></CODE>--not just any true value but
+actually <CODE><B>T</B></CODE>--then you replace the value with the name of the
+attribute.<SUP>7</SUP></P><PRE>(defun emit-attributes (processor attributes)
+  (loop for (k v) on attributes by #'cddr do
+       (raw-string processor (format nil &quot; ~(~a~)='&quot; k))
+       (let ((*escapes* *attribute-escapes*))
+         (process processor (if (eql v t) (string-downcase k) v)))
+       (raw-string processor &quot;'&quot;)))</PRE><P>Emitting the element's body is similar to emitting the attribute
+values: you can loop through the body calling <CODE>process</CODE> to
+evaluate each form. The rest of the code is dedicated to emitting
+fresh lines and adjusting the indentation as appropriate for the type
+of element.</P><PRE>(defun emit-element-body (processor tag body)
+  (when (block-element-p tag)
+    (freshline processor)
+    (indent processor))
+  (when (preserve-whitespace-p tag) (toggle-indenting processor))
+  (dolist (item body)  (process processor item))
+  (when (preserve-whitespace-p tag) (toggle-indenting processor))
+  (when (block-element-p tag)
+    (unindent processor)
+    (freshline processor)))</PRE><P>Finally, <CODE>emit-close-tag</CODE>, as you'd probably expect, emits the
+closing tag (unless no closing tag is necessary, such as when the
+body is empty and you're either emitting XHTML or the element is one
+of the special empty elements). Regardless of whether you actually
+emit a close tag, you need to emit a final fresh line for block and
+paragraph elements.</P><PRE>(defun emit-close-tag (processor tag body-p)
+  (unless (and (or *xhtml* (empty-element-p tag)) (not body-p))
+    (raw-string processor (format nil &quot;&lt;/~(~a~)&gt;&quot; tag)))
+  (when (or (paragraph-element-p tag) (block-element-p tag))
+    (freshline processor)))</PRE><P>The function <CODE>process</CODE> is the basic FOO interpreter. To make it
+a bit easier to use, you can define a function, <CODE>emit-html</CODE>,
+that invokes <CODE>process</CODE>, passing it an <CODE>html-pretty-printer</CODE>
+and a form to evaluate. You can define and use a helper function,
+<CODE>get-pretty-printer</CODE>, to get the pretty printer, which returns
+the current value of <CODE>*html-pretty-printer*</CODE> if it's bound;
+otherwise, it makes a new instance of <CODE>html-pretty-printer</CODE> with
+<CODE>*html-output*</CODE> as its output stream.</P><PRE>(defun emit-html (sexp) (process (get-pretty-printer) sexp))
+
+(defun get-pretty-printer ()
+  (or *html-pretty-printer*
+      (make-instance 
+       'html-pretty-printer
+       :printer (make-instance 'indenting-printer :out *html-output*))))</PRE><P>With this function, you can emit HTML to <CODE>*html-output*</CODE>. Rather
+than expose the variable <CODE>*html-output*</CODE> as part of FOO's public
+API, you should define a macro, <CODE>with-html-output</CODE>, that takes
+care of binding the stream for you. It also lets you specify whether
+you want pretty HTML output, defaulting to the value of the variable
+<CODE>*pretty*</CODE>.</P><PRE>(defmacro with-html-output ((stream &amp;key (pretty *pretty*)) &amp;body body)
+  `(let* ((*html-output* ,stream)
+          (*pretty* ,pretty))
+    ,@body))</PRE><P>So, if you wanted to use <CODE>emit-html</CODE> to generate HTML to a file,
+you could write the following:</P><PRE>(with-open-file (out &quot;foo.html&quot; :direction output)
+  (with-html-output (out :pretty t)
+    (emit-html *some-foo-expression*)))</PRE><A NAME="whats-next"><H2>What's Next?</H2></A><P>In the next chapter, you'll look at how to implement a macro that
+compiles FOO expressions into Common Lisp so you can embed HTML
+generation code directly into your Lisp programs. You'll also extend
+the FOO language to make it a bit more expressive by adding its own
+flavor of special operators and macros.
+</P><HR/><DIV CLASS="notes"><P><SUP>1</SUP>In fact, it's probably
+<I>too</I> expressive since it can also generate all sorts of output
+that's not even vaguely legal HTML. Of course, that might be a
+feature if you need to generate HTML that's not strictly correct to
+compensate for buggy Web browsers. Also, it's common for language
+processors to accept programs that are syntactically correct and
+otherwise well formed that'll nonetheless provoke undefined behavior
+when run.</P><P><SUP>2</SUP>Well, almost every tag.
+Certain tags such as <CODE>IMG</CODE> and <CODE>BR</CODE> don't. You'll deal with
+those in the section &quot;The Basic Evaluation Rule.&quot;</P><P><SUP>3</SUP>In the strict language of
+the Common Lisp standard, keyword symbols aren't <I>self-evaluating</I>,
+though they do, in fact, evaluate to themselves. See section
+3.1.2.1.3 of the language standard or HyperSpec for a brief
+discussion.</P><P><SUP>4</SUP>The requirement to use objects that the Lisp reader
+knows how to read isn't a hard-and-fast one. Since the Lisp reader is
+itself customizable, you could also define a new reader-level syntax
+for a new kind of object. But that tends to be more trouble than it's
+worth.</P><P><SUP>5</SUP>Another, more purely object-oriented, approach
+would be to define two classes, perhaps <CODE>html-pretty-printer</CODE>
+and <CODE>html-raw-printer</CODE>, and then define no-op methods
+specialized on <CODE>html-raw-printer</CODE> for the methods that should do
+stuff only when <CODE>*pretty*</CODE> is true. However, in this case, after
+defining all the no-op methods, you'd end up with more code, and then
+you'd have the hassle of making sure you created an instance of the
+right class at the right time. But in general, using polymorphism to
+replace conditionals is a good strategy.</P><P><SUP>6</SUP>You don't need a predicate for <CODE>*inline-elements*</CODE>
+since you only ever test for block and paragraph elements. I include
+the parameter here for completeness.</P><P><SUP>7</SUP>While XHTML requires boolean attributes to be notated
+with their name as the value to indicate a true value, in HTML it's
+also legal to simply include the name of the attribute with no value,
+for example, <CODE><B>&lt;option selected&gt;</B></CODE> rather than <CODE><B>&lt;option
+selected='selected'&gt;</B></CODE>. All HTML 4.0-compatible browsers should
+understand both forms, but some buggy browsers understand only the
+no-value form for certain attributes. If you need to generate HTML
+for such browsers, you'll need to hack <CODE>emit-attributes</CODE> to emit
+those attributes a bit differently.</P></DIV></BODY></HTML>

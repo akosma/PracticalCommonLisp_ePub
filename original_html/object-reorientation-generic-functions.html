@@ -1,0 +1,588 @@
+<HTML><HEAD><TITLE>Object Reorientation: Generic Functions</TITLE><LINK REL="stylesheet" TYPE="text/css" HREF="style.css"/></HEAD><BODY><DIV CLASS="copyright">Copyright &copy; 2003-2005, Peter Seibel</DIV><H1>16. Object Reorientation: Generic Functions</H1><P>Because the invention of Lisp predated the rise of object-oriented
+programming by a couple decades,<SUP>1</SUP> new Lispers are sometimes surprised to
+discover what a thoroughly object-oriented language Common Lisp is.
+Common Lisp's immediate predecessors were developed at a time when
+object orientation was an exciting new idea and there were many
+experiments with ways to incorporate the ideas of object orientation,
+especially as manifested in Smalltalk, into Lisp. As part of the
+Common Lisp standardization, a synthesis of several of these
+experiments emerged under the name Common Lisp Object System, or CLOS.
+The ANSI standard incorporated CLOS into the language, so it no longer
+really makes sense to speak of CLOS as a separate entity.</P><P>The features CLOS contributed to Common Lisp range from those that
+can hardly be avoided to relatively esoteric manifestations of Lisp's
+language-as-language-building-tool philosophy. Complete coverage of
+all these features is beyond the scope of this book, but in this
+chapter and the next I'll describe the bread-and-butter features and
+give an overview of Common Lisp's approach to objects.</P><P>You should note at the outset that Common Lisp's object system offers
+a fairly different embodiment of the principles of object orientation
+than many other languages. If you have a deep understanding of the
+fundamental ideas behind object orientation, you'll likely appreciate
+the particularly powerful and general way Common Lisp manifests those
+ideas. On the other hand, if your experience with object orientation
+has been largely with a single language, you may find Common Lisp's
+approach somewhat foreign; you should try to avoid assuming that
+there's only one way for a language to support object
+orientation.<SUP>2</SUP> If you have little object-oriented
+programming experience, you should have no trouble understanding the
+explanations here, though it may help to ignore the occasional
+comparisons to the way other languages do things.</P><A NAME="generic-functions-and-classes"><H2>Generic Functions and Classes</H2></A><P>The fundamental idea of object orientation is that a powerful way to
+organize a program is to define data types and then associate
+operations with those data types. In particular, you want to be able
+to invoke an operation and have the exact behavior determined by the
+type of the object or objects on which the operation was invoked. The
+classic example used, seemingly by all introductions to object
+orientation, is an operation <CODE>draw</CODE> that can be applied to
+objects representing various geometric shapes. Different
+implementations of the <CODE>draw</CODE> operation can be provided for
+drawing circles, triangles, and squares, and a call to <CODE>draw</CODE>
+will actually result in drawing a circle, triangle, or square,
+depending on the type of the object to which the <CODE>draw</CODE>
+operation is applied. The different implementations of <CODE>draw</CODE>
+are defined separately, and new versions can be defined that draw
+other shapes without having to change the code of either the caller
+or any of the other <CODE>draw</CODE> implementations. This feature of
+object orientation goes by the fancy Greek name <I>polymorphism</I>,
+meaning &quot;many forms,&quot; because a single conceptual operation, such as
+drawing an object, can take many different concrete forms.</P><P>Common Lisp, like most object-oriented languages today, is
+class-based; all objects are <I>instances</I> of a particular
+class.<SUP>3</SUP> The class of an object determines its
+representation--built-in classes such as <CODE><B>NUMBER</B></CODE> and <CODE><B>STRING</B></CODE>
+have opaque representations accessible only via the standard
+functions for manipulating those types, while instances of
+user-defined classes, as you'll see in the next chapter, consist of
+named parts called <I>slots</I>.</P><P>Classes are arranged in a hierarchy, a taxonomy for all objects. A
+class can be defined as a <I>subclass</I> of other classes, called its
+<I>superclasses</I>. A class <I>inherits</I> part of its definition from its
+superclasses and instances of a class are also considered instances of
+the superclasses. In Common Lisp, the hierarchy of classes has a
+single root, the class <CODE><B>T</B></CODE>, which is a direct or indirect
+superclass of every other class. Thus, every datum in Common Lisp is
+an instance of <CODE><B>T</B></CODE>.<SUP>4</SUP>
+Common Lisp also supports <I>multiple inheritance</I>--a single class can
+have multiple direct superclasses.</P><P>Outside the Lisp family, almost all object-oriented languages follow
+the basic pattern established by Simula of having behavior associated
+with classes through <I>methods</I> or <I>member functions</I> that belong
+to a particular class. In these languages, a method is invoked on a
+particular object, and the class of that object determines what code
+runs. This model of method invocation is called--after the Smalltalk
+terminology--<I>message passing</I>. Conceptually, method invocation in
+a message-passing system starts by sending a <I>message</I> containing
+the name of the method to run and any arguments to the object on
+which the method is being invoked. The object then uses its class to
+look up the method associated with the name in the message and runs
+it. Because each class can have its own method for a given name, the
+same message, sent to different objects, can invoke different
+methods.</P><P>Early Lisp object systems worked in a similar way, providing a
+special function <CODE>SEND</CODE> that could be used to send a message to
+a particular object. However, this wasn't entirely satisfactory, as
+it made method invocations different from normal function calls.
+Syntactically method invocations were written like this: </P><PRE>(send object 'foo)</PRE><P>rather than like this:</P><PRE>(foo object)</PRE><P>More significantly, because methods weren't functions, they couldn't
+be passed as arguments to higher-order functions such as <CODE><B>MAPCAR</B></CODE>;
+if one wanted to call a method on all the elements of a list with
+<CODE><B>MAPCAR</B></CODE>, one had to write this:</P><PRE>(mapcar #'(lambda (object) (send object 'foo)) objects)</PRE><P>rather than this:</P><PRE>(mapcar #'foo objects)</PRE><P>Eventually the folks working on Lisp object systems unified methods
+with functions by creating a new kind of function called a <I>generic
+function</I>. In addition to solving the problems just described,
+generic functions opened up new possibilities for the object system,
+including many features that simply don't make sense in a
+message-passing object system.</P><P>Generic functions are the heart of Common Lisp's object system and
+the topic of the rest of this chapter. While I can't talk about
+generic functions without some mention of classes, for now I'll focus
+on how to define and use generic functions. In the next chapter I'll
+show you how to define your own classes.</P><A NAME="generic-functions-and-methods"><H2>Generic Functions and Methods</H2></A><P>A generic function defines an abstract operation, specifying its name
+and a parameter list but no implementation. Here, for example, is how
+you might define a generic function, <CODE>draw</CODE>, that will be used
+to draw different kinds of shapes on the screen:</P><PRE>(defgeneric draw (shape)
+  (:documentation &quot;Draw the given shape on the screen.&quot;))</PRE><P>I'll discuss the syntax of <CODE><B>DEFGENERIC</B></CODE> in the next section; for
+now just note that this definition doesn't contain any actual code.</P><P>A generic function is generic in the sense that it can--at least in
+theory--accept any objects as arguments.<SUP>5</SUP> However, by itself a generic function can't actually do
+anything; if you just define a generic function, no matter what
+arguments you call it with, it will signal an error. The actual
+implementation of a generic function is provided by <I>methods</I>. Each
+method provides an implementation of the generic function for
+particular classes of arguments. Perhaps the biggest difference
+between a generic function-based system and a message-passing system
+is that methods don't belong to classes; they belong to the generic
+function, which is responsible for determining what method or methods
+to run in response to a particular invocation.</P><P>Methods indicate what kinds of arguments they can handle by
+<I>specializing</I> the required parameters defined by the generic
+function. For instance, on the generic function <CODE>draw</CODE>, you
+might define one method that specializes the <CODE>shape</CODE> parameter
+for objects that are instances of the class <CODE>circle</CODE> while
+another method specializes <CODE>shape</CODE> for objects that are
+instances of the class <CODE>triangle</CODE>. They would look like this,
+eliding the actual drawing code: </P><PRE>(defmethod draw ((shape circle))
+  ...)
+
+(defmethod draw ((shape triangle))
+  ...)</PRE><P>When a generic function is invoked, it compares the actual arguments
+it was passed with the specializers of each of its methods to find
+the <I>applicable</I> methods--those methods whose specializers are
+compatible with the actual arguments. If you invoke <CODE>draw</CODE>,
+passing an instance of <CODE>circle</CODE>, the method that specialized
+<CODE>shape</CODE> on the class <CODE>circle</CODE> is applicable, while if you
+pass it a <CODE>triangle</CODE>, then the method that specializes
+<CODE>shape</CODE> on the class <CODE>triangle</CODE> applies. In simple cases,
+only one method will be applicable, and it will handle the
+invocation. In more complex cases, there may be multiple methods that
+apply; they're then combined, as I'll discuss in the section &quot;Method
+Combination,&quot; into a single <I>effective method</I> that handles the
+invocation.</P><P>You can specialize a parameter in two ways--usually you'll specify a
+class that the argument must be an instance of. Because instances of
+a class are also considered instances of that class's superclasses, a
+method with a parameter specialized on a particular class can be
+applicable whenever the corresponding argument is a direct instance
+of the specializing class or of any of its subclasses. The other kind
+of specializer is a so-called <CODE><B>EQL</B></CODE> specializer, which specifies a
+particular object to which the method applies.</P><P>When a generic function has only methods specialized on a single
+parameter and all the specializers are class specializers, the result
+of invoking a generic function is quite similar to the result of
+invoking a method in a message-passing system--the combination of the
+name of the operation and the class of the object on which it's
+invoked determines what method to run. </P><P>However, reversing the order of lookup opens up possibilities not
+found in message-passing systems. Generic functions support methods
+that specialize on multiple parameters, provide a framework that
+makes multiple inheritance much more manageable, and let you use
+declarative constructs to control how methods are combined into an
+effective method, supporting several common usage patterns without a
+lot of boilerplate code. I'll discuss those topics in a moment. But
+first you need to look at the basics of the two macros used to define
+the generic functions <CODE><B>DEFGENERIC</B></CODE> and <CODE><B>DEFMETHOD</B></CODE>.</P><A NAME="defgeneric"><H2>DEFGENERIC</H2></A><P>To give you a feel for these macros and the various facilities they
+support, I'll show you some code you might write as part of a banking
+application--or, rather, a toy banking application; the point is to
+look at a few language features, not to learn how to really write
+banking software. For instance, this code doesn't even pretend to
+deal with such issues as multiple currencies let alone audit trails
+and transactional integrity.</P><P>Because I'm not going to discuss how to define new classes until the
+next chapter, for now you can just assume that certain classes
+already exist: for starters, assume there's a class
+<CODE>bank-account</CODE> and that it has two subclasses,
+<CODE>checking-account</CODE> and <CODE>savings-account</CODE>. The class
+hierarchy looks like this:</P><P><IMG CLASS="figure" SRC="figures/account-hierarchy.png"/></P><P>The first generic function will be <CODE>withdraw</CODE>, which decreases
+the account balance by a specified amount. If the balance is less
+than the amount, it should signal an error and leave the balance
+unchanged. You can start by defining the generic function with
+<CODE><B>DEFGENERIC</B></CODE>.</P><P>The basic form of <CODE><B>DEFGENERIC</B></CODE> is similar to <CODE><B>DEFUN</B></CODE> except
+with no body. The parameter list of <CODE><B>DEFGENERIC</B></CODE> specifies the
+parameters that must be accepted by all the methods that will be
+defined on the generic function. In the place of the body, a
+<CODE><B>DEFGENERIC</B></CODE> can contain various options. One option you should
+always include is <CODE>:documentation</CODE>, which you use to provide a
+string describing the purpose of the generic function. Because a
+generic function is purely abstract, it's important to be clear to
+both users and implementers what it's for. Thus, you might define
+<CODE>withdraw</CODE> like this: </P><PRE>(defgeneric withdraw (account amount)
+  (:documentation &quot;Withdraw the specified amount from the account.
+Signal an error if the current balance is less than amount.&quot;))</PRE><A NAME="defmethod"><H2>DEFMETHOD</H2></A><P>Now you're ready to use <CODE><B>DEFMETHOD</B></CODE> to define methods that
+implement <CODE>withdraw</CODE>.<SUP>6</SUP></P><P>A method's parameter list must be <I>congruent</I> with its generic
+function's. In this case, that means all methods defined on
+<CODE>withdraw</CODE> must have exactly two required parameters. More
+generally, methods must have the same number of required and optional
+parameters and must be capable of accepting any arguments
+corresponding to any <CODE><B>&amp;rest</B></CODE> or <CODE><B>&amp;key</B></CODE> parameters specified by
+the generic function.<SUP>7</SUP></P><P>Since the basics of withdrawing are the same for all accounts, you
+can define a method that specializes the <CODE>account</CODE> parameter on
+the <CODE>bank-account</CODE> class. You can assume the function
+<CODE>balance</CODE> returns the current balance of the account and can be
+used with <CODE><B>SETF</B></CODE>--and thus with <CODE><B>DECF</B></CODE>--to set the balance. The
+function <CODE><B>ERROR</B></CODE> is a standard function used to signal an error,
+which I'll discuss in greater detail in Chapter 19. Using those two
+functions, you can define a basic <CODE>withdraw</CODE> method that looks
+like this:</P><PRE>(defmethod withdraw ((account bank-account) amount)
+  (when (&lt; (balance account) amount)
+    (error &quot;Account overdrawn.&quot;))
+  (decf (balance account) amount))</PRE><P>As this code suggests, the form of <CODE><B>DEFMETHOD</B></CODE> is even more like
+that of <CODE><B>DEFUN</B></CODE> than <CODE><B>DEFGENERIC</B></CODE>'s is. The only difference is
+that the required parameters can be specialized by replacing the
+parameter name with a two-element list. The first element is the name
+of the parameter, and the second element is the specializer, either
+the name of a class or an <CODE><B>EQL</B></CODE> specializer, the form of which
+I'll discuss in a moment. The parameter name can be anything--it
+doesn't have to match the name used in the generic function, though
+it often will. </P><P>This method will apply whenever the first argument to <CODE>withdraw</CODE>
+is an instance of <CODE>bank-account</CODE>. The second parameter,
+<CODE>amount</CODE>, is implicitly specialized on <CODE><B>T</B></CODE>, and since all
+objects are instances of <CODE><B>T</B></CODE>, it doesn't affect the applicability
+of the method.</P><P>Now suppose all checking accounts have overdraft protection. That is,
+each checking account is linked to another bank account that's drawn
+upon when the balance of the checking account itself can't cover a
+withdrawal. You can assume that the function <CODE>overdraft-account</CODE>
+takes a <CODE>checking-account</CODE> object and returns a
+<CODE>bank-account</CODE> object representing the linked account.</P><P>Thus, withdrawing from a <CODE>checking-account</CODE> object requires a
+few extra steps compared to withdrawing from a standard
+<CODE>bank-account</CODE> object. You must first check whether the amount
+being withdrawn is greater than the account's current balance and, if
+it is, transfer the difference from the overdraft account. Then you
+can proceed as with a standard <CODE>bank-account</CODE> object.</P><P>So what you'd like to do is define a method on <CODE>withdraw</CODE> that
+specializes on <CODE>checking-account</CODE> to handle the transfer and
+then lets the method specialized on <CODE>bank-account</CODE> take control.
+Such a method might look like this: </P><PRE>(defmethod withdraw ((account checking-account) amount)
+  (let ((overdraft (- amount (balance account))))
+    (when (plusp overdraft)
+      (withdraw (overdraft-account account) overdraft)
+      (incf (balance account) overdraft)))
+  (call-next-method))</PRE><P>The function <CODE><B>CALL-NEXT-METHOD</B></CODE> is part of the generic function
+machinery used to combine applicable methods. It indicates that
+control should be passed from this method to the method specialized
+on <CODE>bank-account</CODE>.<SUP>8</SUP>
+When it's called with no arguments, as it is here, the next method is
+invoked with whatever arguments were originally passed to the generic
+function. It can also be called with arguments, which will then be
+passed onto the next method.</P><P>You aren't required to invoke <CODE><B>CALL-NEXT-METHOD</B></CODE> in every method.
+However, if you don't, the new method is then responsible for
+completely implementing the desired behavior of the generic function.
+For example, if you had a subclass of <CODE>bank-account</CODE>,
+<CODE>proxy-account</CODE>, that didn't actually keep track of its own
+balance but instead delegated withdrawals to another account, you
+might write a method like this (assuming a function,
+<CODE>proxied-account</CODE>, that returns the proxied account):</P><PRE>(defmethod withdraw ((proxy proxy-account) amount)
+  (withdraw (proxied-account proxy) amount))</PRE><P>Finally, <CODE><B>DEFMETHOD</B></CODE> also allows you to create methods specialized
+on a particular object with an <CODE><B>EQL</B></CODE> specializer. For example,
+suppose the banking app is going to be deployed in a particularly
+corrupt bank. Suppose the variable <CODE>*account-of-bank-president*</CODE>
+holds a reference to a particular bank account that belongs--as the
+name suggests--to the bank's president. Further suppose the variable
+<CODE>*bank*</CODE> represents the bank as a whole, and the function
+<CODE>embezzle</CODE> steals money from the bank. The bank president might
+ask you to &quot;fix&quot; <CODE>withdraw</CODE> to handle his account specially. </P><PRE>(defmethod withdraw ((account (eql *account-of-bank-president*)) amount)
+  (let ((overdraft (- amount (balance account))))
+    (when (plusp overdraft)
+      (incf (balance account) (embezzle *bank* overdraft)))
+  (call-next-method)))</PRE><P>Note, however, that the form in the <CODE><B>EQL</B></CODE> specializer that
+provides the object to specialize
+on--<CODE>*account-of-bank-president*</CODE> in this case--is evaluated
+once, when the <CODE><B>DEFMETHOD</B></CODE> is evaluated. This method will be
+specialized on the value of <CODE>*account-of-bank-president*</CODE> at the
+time the method is defined; changing the variable later won't change
+the method. </P><A NAME="method-combination"><H2>Method Combination</H2></A><P>Outside the body of a method, <CODE><B>CALL-NEXT-METHOD</B></CODE> has no meaning.
+Within a method, it's given a meaning by the generic function
+machinery that builds an <I>effective method</I> each time the generic
+function is invoked using all the methods applicable to that
+particular invocation. This notion of building an effective method by
+combining applicable methods is the heart of the generic function
+concept and is the thing that allows generic functions to support
+facilities not found in message-passing systems. So it's worth taking
+a closer look at what's really happening. Folks with the
+message-passing model deeply ingrained in their consciousness should
+pay particular attention because generic functions turn method
+dispatching inside out compared to message passing, making the
+generic function, rather than the class, the prime mover.</P><P>Conceptually, the effective method is built in three steps: First,
+the generic function builds a list of applicable methods based on the
+actual arguments it was passed. Second, the list of applicable
+methods is sorted according to the <I>specificity</I> of their parameter
+specializers. Finally, methods are taken in order from the sorted
+list and their code combined to produce the effective
+method.<SUP>9</SUP></P><P>To find applicable methods, the generic function compares the actual
+arguments with the corresponding parameter specializers in each of
+its methods. A method is applicable if, and only if, all the
+specializers are compatible with the corresponding arguments.</P><P>When the specializer is the name of a class, it's compatible if it
+names the actual class of the argument or one of its superclasses.
+(Recall that parameters without explicit specializers are implicitly
+specialized on the class <CODE><B>T</B></CODE> so will be compatible with any
+argument.) An <CODE><B>EQL</B></CODE> specializer is compatible only when the
+argument is the same object as was specified in the specializer.</P><P>Because <I>all</I> the arguments are checked against the corresponding
+specializers, they all affect whether a method is applicable. Methods
+that explicitly specialize more than one parameter are called
+<I>multimethods</I>; I'll discuss them in the section &quot;Multimethods.&quot; </P><P>After the applicable methods have been found, the generic function
+machinery needs to sort them before it can combine them into an
+effective method. To order two applicable methods, the generic
+function compares their parameter specializers from left to
+right,<SUP>10</SUP> and the first specializer that's different between the two
+methods determines their ordering, with the method with the more
+specific specializer coming first.</P><P>Because only applicable methods are being sorted, you know all class
+specializers will name classes that the corresponding argument is
+actually an instance of. In the typical case, if two class
+specializers differ, one will be a subclass of the other. In that
+case, the specializer naming the subclass is considered more
+specific. This is why the method that specialized <CODE>account</CODE> on
+<CODE>checking-account</CODE> was considered more specific than the method
+that specialized it on <CODE>bank-account</CODE>.</P><P>Multiple inheritance slightly complicates the notion of specificity
+since the actual argument may be an instance of two classes, neither
+of which is a subclass of the other. If such classes are used as
+parameter specializers, the generic function can't order them using
+only the rule that subclasses are more specific than their
+superclasses. In the next chapter I'll discuss how the notion of
+specificity is extended to deal with multiple inheritance. For now,
+suffice it to say that there's a deterministic algorithm for ordering
+class specializers.</P><P>Finally, an <CODE><B>EQL</B></CODE> specializer is always more specific than any
+class specializer, and because only applicable methods are being
+considered, if more than one method has an <CODE><B>EQL</B></CODE> specializer for a
+particular parameter, they must all have the same <CODE><B>EQL</B></CODE>
+specializer. The comparison of those methods will thus be decided
+based on other parameters. </P><A NAME="the-standard-method-combination"><H2>The Standard Method Combination</H2></A><P>Now that you understand how the applicable methods are found and
+sorted, you're ready to take a closer look at the last step--how the
+sorted list of methods is combined into a single effective method. By
+default, generic functions use what's called the <I>standard method
+combination</I>. The standard method combination combines methods so
+that <CODE><B>CALL-NEXT-METHOD</B></CODE> works as you've already seen--the most
+specific method runs first, and each method can pass control to the
+next most specific method via <CODE><B>CALL-NEXT-METHOD</B></CODE>.</P><P>However, there's a bit more to it than that. The methods I've been
+discussing so far are called <I>primary methods</I>. Primary methods, as
+their name suggests, are responsible for providing the primary
+implementation of a generic function. The standard method combination
+also supports three kinds of <I>auxiliary</I> methods: <CODE>:before</CODE>,
+<CODE>:after</CODE>, and <CODE>:around</CODE> methods. An auxiliary method
+definition is written with <CODE><B>DEFMETHOD</B></CODE> like a primary method but
+with a <I>method qualifier,</I> which names the type of method, between
+the name of the method and the parameter list. For instance, a
+<CODE>:before</CODE> method on <CODE>withdraw</CODE> that specializes the
+<CODE>account</CODE> parameter on the class <CODE>bank-account</CODE> would start
+like this: </P><PRE>(defmethod withdraw :before ((account bank-account) amount) ...)</PRE><P>Each kind of auxiliary method is combined into the effective method
+in a different way. All the applicable <CODE>:before</CODE> methods--not
+just the most specific--are run as part of the effective method. They
+run, as their name suggests, before the most specific primary method
+and are run in most-specific-first order. Thus, <CODE>:before</CODE>
+methods can be used to do any preparation needed to ensure that the
+primary method can run. For instance, you could've used a
+<CODE>:before</CODE> method specialized on <CODE>checking-account</CODE> to
+implement the overdraft protection on checking accounts like this:</P><PRE>(defmethod withdraw :before ((account checking-account) amount)
+  (let ((overdraft (- amount (balance account))))
+    (when (plusp overdraft)
+      (withdraw (overdraft-account account) overdraft)
+      (incf (balance account) overdraft))))</PRE><P>This <CODE>:before</CODE> method has three advantages over a primary
+method. One is that it makes it immediately obvious how the method
+changes the overall behavior of the <CODE>withdraw</CODE> function--it's
+not going to interfere with the main behavior or change the result
+returned. </P><P>The next advantage is that a primary method specialized on a class
+more specific than <CODE>checking-account</CODE> won't interfere with this
+<CODE>:before</CODE> method, making it easier for an author of a subclass
+of <CODE>checking-account</CODE> to extend the behavior of <CODE>withdraw</CODE>
+while keeping part of the old behavior.</P><P>Lastly, since a <CODE>:before</CODE> method doesn't have to call
+<CODE><B>CALL-NEXT-METHOD</B></CODE> to pass control to the remaining methods, it's
+impossible to introduce a bug by forgetting to.</P><P>The other auxiliary methods also fit into the effective method in
+ways suggested by their names. All the <CODE>:after</CODE> methods run
+after the primary methods in most-specific-last order, that is, the
+reverse of the <CODE>:before</CODE> methods. Thus, the <CODE>:before</CODE> and
+<CODE>:after</CODE> methods combine to create a sort of nested wrapping
+around the core functionality provided by the primary methods--each
+more-specific <CODE>:before</CODE> method will get a chance to set things
+up so the less-specific <CODE>:before</CODE> methods and primary methods
+can run successfully, and each more-specific <CODE>:after</CODE> method
+will get a chance to clean up after all the primary methods and
+less-specific <CODE>:after</CODE> methods.</P><P>Finally, <CODE>:around</CODE> methods are combined much like primary
+methods except they're run &quot;around&quot; all the other methods. That is,
+the code from the most specific <CODE>:around</CODE> method is run before
+anything else. Within the body of an <CODE>:around</CODE> method,
+<CODE><B>CALL-NEXT-METHOD</B></CODE> will lead to the code of the next most specific
+<CODE>:around</CODE> method or, in the least specific <CODE>:around</CODE>
+method, to the complex of <CODE>:before</CODE>, primary, and <CODE>:after</CODE>
+methods. Almost all <CODE>:around</CODE> methods will contain such a call
+to <CODE><B>CALL-NEXT-METHOD</B></CODE> because an <CODE>:around</CODE> method that
+doesn't will completely hijack the implementation of the generic
+function from all the methods except for more-specific <CODE>:around</CODE>
+methods. </P><P>Occasionally that kind of hijacking is called for, but typically
+<CODE>:around</CODE> methods are used to establish some dynamic context in
+which the rest of the methods will run--to bind a dynamic variable,
+for example, or to establish an error handler (as I'll discuss in
+Chapter 19). About the only time it's appropriate for an
+<CODE>:around</CODE> method to not call <CODE><B>CALL-NEXT-METHOD</B></CODE> is when it
+returns a result cached from a previous call to
+<CODE><B>CALL-NEXT-METHOD</B></CODE>. At any rate, an <CODE>:around</CODE> method that
+doesn't call <CODE><B>CALL-NEXT-METHOD</B></CODE> is responsible for correctly
+implementing the semantics of the generic function for all classes of
+arguments to which the method may apply, including future subclasses.</P><P>Auxiliary methods are just a convenient way to express certain common
+patterns more concisely and concretely. They don't actually allow you
+to do anything you couldn't do by combining primary methods with
+diligent adherence to a few coding conventions and some extra typing.
+Perhaps their biggest benefit is that they provide a uniform
+framework for extending generic functions. Often a library will
+define a generic function and provide a default primary method,
+allowing users of the library to customize its behavior by defining
+appropriate auxiliary methods.</P><A NAME="other-method-combinations"><H2>Other Method Combinations</H2></A><P>In addition to the standard method combination, the language
+specifies nine other built-in method combinations known as the
+<I>simple</I> built-in method combinations. You can also define custom
+method combinations, though that's a fairly esoteric feature and
+beyond the scope of this book. I'll briefly cover how to use the
+simple built-in combinations to give you a sense of the
+possibilities. </P><P>All the simple combinations follow the same pattern: instead of
+invoking the most specific primary method and letting it invoke
+less-specific primary methods via <CODE><B>CALL-NEXT-METHOD</B></CODE>, the simple
+method combinations produce an effective method that contains the
+code of all the primary methods, one after another, all wrapped in a
+call to the function, macro, or special operator that gives the
+method combination its name. The nine combinations are named for the
+operators: <CODE><B>+</B></CODE>, <CODE><B>AND</B></CODE>, <CODE><B>OR</B></CODE>, <CODE><B>LIST</B></CODE>, <CODE><B>APPEND</B></CODE>,
+<CODE><B>NCONC</B></CODE>, <CODE><B>MIN</B></CODE>, <CODE><B>MAX</B></CODE>, and <CODE><B>PROGN</B></CODE>. The simple
+combinations also support only two kinds of methods, primary methods,
+which are combined as just described, and <CODE>:around</CODE> methods,
+which work like <CODE>:around</CODE> methods in the standard method
+combination.</P><P>For example, a generic function that uses the <CODE><B>+</B></CODE> method
+combination will return the sum of all the results returned by its
+primary methods. Note that the <CODE><B>AND</B></CODE> and <CODE><B>OR</B></CODE> method
+combinations won't necessarily run all the primary methods because of
+those macros' short-circuiting behavior--a generic function using the
+<CODE><B>AND</B></CODE> combination will return <CODE><B>NIL</B></CODE> as soon as one of the
+methods does and will return the value of the last method otherwise.
+Similarly, the <CODE><B>OR</B></CODE> combination will return the first non-<CODE><B>NIL</B></CODE>
+value returned by any of the methods.</P><P>To define a generic function that uses a particular method
+combination, you include a <CODE>:method-combination</CODE> option in the
+<CODE><B>DEFGENERIC</B></CODE> form. The value supplied with this option is the name
+of the method combination you want to use. For example, to define a
+generic function, <CODE>priority</CODE>, that returns the sum of values
+returned by individual methods using the <CODE><B>+</B></CODE> method combination,
+you might write this:</P><PRE>(defgeneric priority (job)
+  (:documentation &quot;Return the priority at which the job should be run.&quot;)
+  (:method-combination +))</PRE><P>By default all these method combinations combine the primary methods
+in most-specific-first order. However, you can reverse the order by
+including the keyword <CODE>:most-specific-last</CODE> after the name of
+the method combination in the <CODE><B>DEFGENERIC</B></CODE> form. The order
+probably doesn't matter if you're using the <CODE><B>+</B></CODE> combination unless
+the methods have side effects, but for demonstration purposes you can
+change <CODE>priority</CODE> to use most-specific-last order like this: </P><PRE>(defgeneric priority (job)
+  (:documentation &quot;Return the priority at which the job should be run.&quot;)
+  (:method-combination + :most-specific-last))</PRE><P>The primary methods on a generic function that uses one of these
+combinations must be qualified with the name of the method
+combination. Thus, a primary method defined on <CODE>priority</CODE> might
+look like this:</P><PRE>(defmethod priority + ((job express-job)) 10)</PRE><P>This makes it obvious when you see a method definition that it's part
+of a particular kind of generic function.</P><P>All the simple built-in method combinations also support
+<CODE>:around</CODE> methods that work like <CODE>:around</CODE> methods in the
+standard method combination: the most specific <CODE>:around</CODE> method
+runs before any other methods, and <CODE><B>CALL-NEXT-METHOD</B></CODE> is used to
+pass control to less-and-less-specific <CODE>:around</CODE> methods until
+it reaches the combined primary methods. The
+<CODE>:most-specific-last</CODE> option doesn't affect the order of
+<CODE>:around</CODE> methods. And, as I mentioned before, the built-in
+method combinations don't support <CODE>:before</CODE> or <CODE>:after</CODE>
+methods.</P><P>Like the standard method combination, these method combinations don't
+allow you to do anything you couldn't do &quot;by hand.&quot; Rather, they
+allow you to express <I>what</I> you want and let the language take care
+of wiring everything together for you, making your code both more
+concise and more expressive.</P><P>That said, probably 99 percent of the time, the standard method
+combination will be exactly what you want. Of the remaining 1
+percent, probably 99 percent of them will be handled by one of the
+simple built-in method combinations. If you run into one of the 1
+percent of 1 percent of cases where none of the built-in combinations
+suffices, you can look up <CODE><B>DEFINE-METHOD-COMBINATION</B></CODE> in your
+favorite Common Lisp reference. </P><A NAME="multimethods"><H2>Multimethods</H2></A><P>Methods that explicitly specialize more than one of the generic
+function's required parameters are called <I>multimethods</I>.
+Multimethods are where generic functions and message passing really
+part ways. Multimethods don't fit into message-passing languages
+because they don't belong to a particular class; instead, each
+multimethod defines a part of the implementations of a given generic
+function that applies when the generic function is invoked with
+arguments that match <I>all</I> the method's specialized parameters.</P><DIV CLASS="sidebarhead">Multimethods vs. Method Overloading</DIV><DIV CLASS="sidebar"><P>Programmers used to statically typed message-passing
+languages such as Java and C++ may think multimethods sound similar to
+a feature of those languages called <I>method overloading</I>. However,
+these two language features are actually quite different since
+overloaded methods are chosen at compile time, based on the
+compile-time type of the arguments, not at runtime. To see how this
+works, consider the following two Java classes:</P><PRE>public class A {
+  public void foo(A a) { System.out.println(&quot;A/A&quot;); }
+  public void foo(B b) { System.out.println(&quot;A/B&quot;); }
+}</PRE><PRE>public class B extends A {
+  public void foo(A a) { System.out.println(&quot;B/A&quot;); }
+  public void foo(B b) { System.out.println(&quot;B/B&quot;); }
+}</PRE><P>Now consider what happens when you run the <CODE>main</CODE> method from
+this class.</P><PRE>public class Main {
+  public static void main(String[] argv) {
+    A obj = argv[0].equals(&quot;A&quot;) ? new A() : new B();
+    obj.foo(obj);
+  }
+}</PRE><P>When you tell <CODE>Main</CODE> to instantiate an <CODE>A</CODE>, it prints &quot;A/A&quot;
+as you'd probably expect.</P><PRE>bash$ java com.gigamonkeys.Main A
+A/A</PRE><P>However, if you tell <CODE>Main</CODE> to instantiate a <CODE>B</CODE>, then the
+true type of <CODE>obj</CODE> is taken into account for only half the
+dispatching.</P><PRE>bash$ java com.gigamonkeys.Main B
+B/A</PRE><P>If overloaded methods worked like Common Lisp's multimethods, then
+that would print &quot;B/B&quot; instead. It is possible to implement multiple
+dispatch by hand in message-passing languages, but this runs against
+the grain of the message-passing model since the code in a multiply
+dispatched method doesn't belong to any one class.</P></DIV><P>Multimethods are perfect for all those situations where, in a
+message-passing language, you struggle to decide to which class a
+certain behavior ought to belong. Is the sound a drum makes when it's
+hit with a drumstick a function of what kind of drum it is or what
+kind of stick you use to hit it? Both, of course. To model this
+situation in Common Lisp, you simply define a generic function
+<CODE>beat</CODE> that takes two arguments.</P><PRE>(defgeneric beat (drum stick)
+  (:documentation
+   &quot;Produce a sound by hitting the given drum with the given stick.&quot;))</PRE><P>Then you can define various multimethods to implement <CODE>beat</CODE> for
+the combinations you care about. For example:</P><PRE>(defmethod beat ((drum snare-drum) (stick wooden-drumstick)) ...)
+(defmethod beat ((drum snare-drum) (stick brush)) ...)
+(defmethod beat ((drum snare-drum) (stick soft-mallet)) ...)
+(defmethod beat ((drum tom-tom) (stick wooden-drumstick)) ...)
+(defmethod beat ((drum tom-tom) (stick brush)) ...)
+(defmethod beat ((drum tom-tom) (stick soft-mallet)) ...)</PRE><P>Multimethods don't help with the combinatorial explosion--if you need
+to model five kinds of drums and six kinds of sticks, and every
+combination makes a different sound, there's no way around it; you
+need thirty different methods to implement all the combinations, with
+or without multimethods. What multimethods do save you from is having
+to write a bunch of dispatching code by letting you use the same
+built-in polymorphic dispatching that's so useful when dealing with
+methods specialized on a single parameter.<SUP>11</SUP></P><P>Multimethods also save you from having to tightly couple one set of
+classes with the other. In the drum/stick example, nothing requires
+the implementation of the drum classes to know about the various
+classes of drumstick, and nothing requires the drumstick classes to
+know anything about the various classes of drum. The multimethods
+connect the otherwise independent classes to describe their joint
+behavior without requiring any cooperation from the classes
+themselves. </P><A NAME="to-be-continued---"><H2>To Be Continued . . .</H2></A><P>I've covered the basics--and a bit beyond--of generic functions, the
+verbs of Common Lisp's object system. In the next chapter I'll show
+you how to define your own classes.
+</P><HR/><DIV CLASS="notes"><P><SUP>1</SUP>The language now generally
+considered the first object-oriented language, Simula, was invented in
+the early 1960s, only a few years after McCarthy's first Lisp.
+However, object orientation didn't really take off until the 1980s
+when the first widely available version of Smalltalk was released,
+followed by the release of C++ a few years later. Smalltalk took quite
+a bit of inspiration from Lisp and combined it with ideas from Simula
+to produce a dynamic object-oriented language, while C++ combined
+Simula with C, another fairly static language, to yield a static
+object-oriented language. This early split has led to much confusion
+in the definition of object orientation. Folks who come from the C++
+tradition tend to consider certain aspects of C++, such as strict data
+encapsulation, to be key characteristics of object orientation. Folks
+from the Smalltalk tradition, however, consider many features of C++
+to be just that, features of C++, and not core to object orientation.
+Indeed, Alan Kay, the inventor of Smalltalk, is reported to have said,
+&quot;I invented the term <I>object oriented</I>, and I can tell you that C++
+wasn't what I had in mind.&quot;</P><P><SUP>2</SUP>There are those who reject the notion that Common
+Lisp is in fact object oriented at all. In particular, folks who
+consider strict data encapsulation a key characteristic of object
+orientation--usually advocates of relatively static languages such as
+C++, Eiffel, or Java--don't consider Common Lisp to be properly
+object oriented. Of course, by that definition, Smalltalk, arguably
+one of the original and purest object-oriented languages, isn't
+object oriented either. On the other hand, folks who consider message
+passing to be the key to object orientation will also not be happy
+with the claim that Common Lisp is object oriented since Common
+Lisp's generic function orientation provides degrees of freedom not
+offered by pure message passing.</P><P><SUP>3</SUP>Prototype-based languages are the other style of
+object-oriented language. In these languages, JavaScript being
+perhaps the most famous example, objects are created by cloning a
+prototypical object. The clone can then be modified and used as a
+prototype for other objects.</P><P><SUP>4</SUP><CODE><B>T</B></CODE> the constant value and <CODE><B>T</B></CODE> the
+class have no particular relationship except they happen to have the
+same name. <CODE><B>T</B></CODE> the value is a direct instance of the class
+<CODE><B>SYMBOL</B></CODE> and only indirectly an instance of <CODE><B>T</B></CODE> the class.</P><P><SUP>5</SUP>Here, as elsewhere,
+<I>object</I> means any Lisp datum--Common Lisp doesn't distinguish, as
+some languages do, between objects and &quot;primitive&quot; data types; all
+data in Common Lisp are objects, and every object is an instance of a
+class.</P><P><SUP>6</SUP>Technically you could skip the
+<CODE><B>DEFGENERIC</B></CODE> altogether--if you define a method with
+<CODE><B>DEFMETHOD</B></CODE> and no such generic function has been defined, one is
+automatically created. But it's good form to define generic functions
+explicitly, if only because it gives you a good place to document the
+intended behavior.</P><P><SUP>7</SUP>A method can &quot;accept&quot; <CODE><B>&amp;key</B></CODE> and
+<CODE><B>&amp;rest</B></CODE> arguments defined in its generic function by having a
+<CODE><B>&amp;rest</B></CODE> parameter, by having the same <CODE><B>&amp;key</B></CODE> parameters, or by
+specifying <CODE><B>&amp;allow-other-keys</B></CODE> along with <CODE><B>&amp;key</B></CODE>. A method can
+also specify <CODE><B>&amp;key</B></CODE> parameters not found in the generic function's
+parameter list--when the generic function is called, any <CODE><B>&amp;key</B></CODE>
+parameter specified by the generic function or any applicable method
+will be accepted.</P><P><SUP>8</SUP><CODE><B>CALL-NEXT-METHOD</B></CODE> is roughly
+analogous to invoking a method on <CODE>super</CODE> in Java or using an
+explicitly class-qualified method or function name in Python or C++.</P><P><SUP>9</SUP>While building the effective method sounds
+time-consuming, quite a bit of the effort in developing fast Common
+Lisp implementations has gone into making it efficient. One strategy
+is to cache the effective method so future calls with the same
+argument types will be able to proceed directly.</P><P><SUP>10</SUP>Actually, the order in which specializers are compared is
+customizable via the <CODE><B>DEFGENERIC</B></CODE> option
+<CODE>:argument-precedence-order</CODE>, though that option is rarely
+used.</P><P><SUP>11</SUP>In languages without
+multimethods, you must write dispatching code yourself to implement
+behavior that depends on the class of more than one object. The
+purpose of the popular Visitor design pattern is to structure a
+series of singly dispatched method calls so as to provide multiple
+dispatch. However, it requires one set of classes to know about the
+other. The Visitor pattern also quickly bogs down in a combinatorial
+explosion of dispatching methods if it's used to dispatch on more
+than two objects.</P></DIV></BODY></HTML>

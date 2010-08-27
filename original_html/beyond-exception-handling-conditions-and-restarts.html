@@ -1,0 +1,460 @@
+<HTML><HEAD><TITLE>Beyond Exception Handling: Conditions and Restarts</TITLE><LINK REL="stylesheet" TYPE="text/css" HREF="style.css"/></HEAD><BODY><DIV CLASS="copyright">Copyright &copy; 2003-2005, Peter Seibel</DIV><H1>19. Beyond Exception Handling: Conditions and Restarts</H1><P>One of Lisp's great features is its <I>condition</I> system. It serves a
+similar purpose to the exception handling systems in Java, Python, and
+C++ but is more flexible. In fact, its flexibility extends beyond
+error handling--conditions are more general than exceptions in that a
+condition can represent any occurrence during a program's execution
+that may be of interest to code at different levels on the call stack.
+For example, in the section &quot;Other Uses for Conditions,&quot; you'll see
+that conditions can be used to emit warnings without disrupting
+execution of the code that emits the warning while allowing code
+higher on the call stack to control whether the warning message is
+printed. For the time being, however, I'll focus on error handling.</P><P>The condition system is more flexible than exception systems because
+instead of providing a two-part division between the code that
+signals an error<SUP>1</SUP> and the code that handles it,<SUP>2</SUP> the condition system splits the
+responsibilities into three parts--<I>signaling</I> a condition,
+<I>handling</I> it, and <I>restarting</I>. In this chapter, I'll describe
+how you could use conditions in part of a hypothetical application
+for analyzing log files. You'll see how you could use the condition
+system to allow a low-level function to detect a problem while
+parsing a log file and signal an error, to allow mid-level code to
+provide several possible ways of recovering from such an error, and
+to allow code at the highest level of the application to define a
+policy for choosing which recovery strategy to use.</P><P>To start, I'll introduce some terminology: <I>errors</I>, as I'll use
+the term, are the consequences of Murphy's law. If something can go
+wrong, it will: a file that your program needs to read will be
+missing, a disk that you need to write to will be full, the server
+you're talking to will crash, or the network will go down. If any of
+these things happen, it may stop a piece of code from doing what you
+want. But there's no bug; there's no place in the code that you can
+fix to make the nonexistent file exist or the disk not be full.
+However, if the rest of the program is depending on the actions that
+were going to be taken, then you'd better deal with the error somehow
+or you <I>will</I> have introduced a bug. So, errors aren't caused by
+bugs, but neglecting to handle an error is almost certainly a bug.</P><P>So, what does it mean to handle an error? In a well-written program,
+each function is a black box hiding its inner workings. Programs are
+then built out of layers of functions: high-level functions are built
+on top of the lower-level functions, and so on. This hierarchy of
+functionality manifests itself at runtime in the form of the call
+stack: if <CODE>high</CODE> calls <CODE>medium</CODE>, which calls <CODE>low</CODE>,
+when the flow of control is in <CODE>low</CODE>, it's also still in
+<CODE>medium</CODE> and <CODE>high</CODE>, that is, they're still on the call
+stack.</P><P>Because each function is a black box, function boundaries are an
+excellent place to deal with errors. Each function--<CODE>low</CODE>, for
+example--has a job to do. Its direct caller--<CODE>medium</CODE> in this
+case--is counting on it to do its job. However, an error that
+prevents it from doing its job puts all its callers at risk:
+<CODE>medium</CODE> called <CODE>low</CODE> because it needs the work done that
+<CODE>low</CODE> does; if that work doesn't get done, <CODE>medium</CODE> is in
+trouble. But this means that <CODE>medium</CODE>'s caller, <CODE>high</CODE>, is
+also in trouble--and so on up the call stack to the very top of the
+program. On the other hand, because each function is a black box, if
+any of the functions in the call stack can somehow do their job
+despite underlying errors, then none of the functions above it needs
+to know there was a problem--all those functions care about is that
+the function they called somehow did the work expected of it.</P><P>In most languages, errors are handled by returning from a failing
+function and giving the caller the choice of either recovering or
+failing itself. Some languages use the normal function return
+mechanism, while languages with exceptions return control by
+<I>throwing</I> or <I>raising</I> an exception. Exceptions are a vast
+improvement over using normal function returns, but both schemes
+suffer from a common flaw: while searching for a function that can
+recover, the stack unwinds, which means code that might recover has
+to do so without the context of what the lower-level code was trying
+to do when the error actually occurred.</P><P>Consider the hypothetical call chain of <CODE>high</CODE>, <CODE>medium</CODE>,
+<CODE>low</CODE>. If <CODE>low</CODE> fails and <CODE>medium</CODE> can't recover, the
+ball is in <CODE>high</CODE>'s court. For <CODE>high</CODE> to handle the error,
+it must either do its job without any help from <CODE>medium</CODE> or
+somehow change things so calling <CODE>medium</CODE> will work and call it
+again. The first option is theoretically clean but implies a lot of
+extra code--a whole extra implementation of whatever it was
+<CODE>medium</CODE> was supposed to do. And the further the stack unwinds,
+the more work that needs to be redone. The second option--patching
+things up and retrying--is tricky; for <CODE>high</CODE> to be able to
+change the state of the world so a second call into <CODE>medium</CODE>
+won't end up causing an error in <CODE>low</CODE>, it'd need an unseemly
+knowledge of the inner workings of both <CODE>medium</CODE> and <CODE>low</CODE>,
+contrary to the notion that each function is a black box.</P><A NAME="the-lisp-way"><H2>The Lisp Way</H2></A><P>Common Lisp's error handling system gives you a way out of this
+conundrum by letting you separate the code that actually recovers
+from an error from the code that decides how to recover. Thus, you
+can put recovery code in low-level functions without committing to
+actually using any particular recovery strategy, leaving that
+decision to code in high-level functions.</P><P>To get a sense of how this works, let's suppose you're writing an
+application that reads some sort of textual log file, such as a Web
+server's log. Somewhere in your application you'll have a function to
+parse the individual log entries. Let's assume you'll write a
+function, <CODE>parse-log-entry</CODE>, that will be passed a string
+containing the text of a single log entry and that is supposed to
+return a <CODE>log-entry</CODE> object representing the entry. This
+function will be called from a function, <CODE>parse-log-file</CODE>, that
+reads a complete log file and returns a list of objects representing
+all the entries in the file.</P><P>To keep things simple, the <CODE>parse-log-entry</CODE> function will not
+be required to parse incorrectly formatted entries. It will, however,
+be able to detect when its input is malformed. But what should it do
+when it detects bad input? In C you'd return a special value to
+indicate there was a problem. In Java or Python you'd throw or raise
+an exception. In Common Lisp, you signal a condition.</P><A NAME="conditions"><H2>Conditions</H2></A><P>A <I>condition</I> is an object whose class indicates the general nature
+of the condition and whose instance data carries information about
+the details of the particular circumstances that lead to the
+condition being signaled.<SUP>3</SUP> In this
+hypothetical log analysis program, you might define a condition
+class, <CODE>malformed-log-entry-error</CODE>, that <CODE>parse-log-entry</CODE>
+will signal if it's given data it can't parse.</P><P>Condition classes are defined with the <CODE><B>DEFINE-CONDITION</B></CODE> macro,
+which works essentially the same as <CODE><B>DEFCLASS</B></CODE> except that the
+default superclass of classes defined with <CODE><B>DEFINE-CONDITION</B></CODE> is
+<CODE><B>CONDITION</B></CODE> rather than <CODE><B>STANDARD-OBJECT</B></CODE>. Slots are specified
+in the same way, and condition classes can singly and multiply
+inherit from other classes that descend from <CODE><B>CONDITION</B></CODE>. But for
+historical reasons, condition classes aren't required to be instances
+of <CODE><B>STANDARD-OBJECT</B></CODE>, so some of the functions you use with
+<CODE><B>DEFCLASS</B></CODE>ed classes aren't required to work with conditions. In
+particular, a condition's slots can't be accessed using
+<CODE><B>SLOT-VALUE</B></CODE>; you must specify either a <CODE>:reader</CODE> option or
+an <CODE>:accessor</CODE> option for any slot whose value you intend to
+use. Likewise, new condition objects are created with
+<CODE><B>MAKE-CONDITION</B></CODE> rather than <CODE><B>MAKE-INSTANCE</B></CODE>.
+<CODE><B>MAKE-CONDITION</B></CODE> initializes the slots of the new condition based
+on the <CODE>:initarg</CODE>s it's passed, but there's no way to further
+customize a condition's initialization, equivalent to
+<CODE><B>INITIALIZE-INSTANCE</B></CODE>.<SUP>4</SUP></P><P>When using the condition system for error handling, you should define
+your conditions as subclasses of <CODE><B>ERROR</B></CODE>, a subclass of
+<CODE><B>CONDITION</B></CODE>. Thus, you might define
+<CODE>malformed-log-entry-error</CODE>, with a slot to hold the argument
+that was passed to <CODE>parse-log-entry</CODE>, like this:</P><PRE>(define-condition malformed-log-entry-error (error)
+  ((text :initarg :text :reader text)))</PRE><A NAME="condition-handlers"><H2>Condition Handlers</H2></A><P>In <CODE>parse-log-entry</CODE> you'll signal a
+<CODE>malformed-log-entry-error</CODE> if you can't parse the log entry.
+You signal errors with the function <CODE><B>ERROR</B></CODE>, which calls the
+lower-level function <CODE><B>SIGNAL</B></CODE> and drops into the debugger if the
+condition isn't handled. You can call <CODE><B>ERROR</B></CODE> two ways: you can
+pass it an already instantiated condition object, or you can pass it
+the name of the condition class and any initargs needed to construct
+a new condition, and it will instantiate the condition for you. The
+former is occasionally useful for resignaling an existing condition
+object, but the latter is more concise. Thus, you could write
+<CODE>parse-log-entry</CODE> like this, eliding the details of actually
+parsing a log entry:</P><PRE>(defun parse-log-entry (text)
+  (if (well-formed-log-entry-p text)
+    (make-instance 'log-entry ...)
+    (error 'malformed-log-entry-error :text text)))</PRE><P>What happens when the error is signaled depends on the code above
+<CODE>parse-log-entry</CODE> on the call stack. To avoid landing in the
+debugger, you must establish a <I>condition handler</I> in one of the
+functions leading to the call to <CODE>parse-log-entry</CODE>. When a
+condition is signaled, the signaling machinery looks through a list
+of active condition handlers, looking for a handler that can handle
+the condition being signaled based on the condition's class. Each
+condition handler consists of a type specifier indicating what types
+of conditions it can handle and a function that takes a single
+argument, the condition. At any given moment there can be many active
+condition handlers established at various levels of the call stack.
+When a condition is signaled, the signaling machinery finds the most
+recently established handler whose type specifier is compatible with
+the condition being signaled and calls its function, passing it the
+condition object.</P><P>The handler function can then choose whether to handle the condition.
+The function can decline to handle the condition by simply returning
+normally, in which case control returns to the <CODE><B>SIGNAL</B></CODE> function,
+which will search for the next most recently established handler with
+a compatible type specifier. To handle the condition, the function
+must transfer control out of <CODE><B>SIGNAL</B></CODE> via a <I>nonlocal exit</I>. In
+the next section, you'll see how a handler can choose where to
+transfer control. However, many condition handlers simply want to
+unwind the stack to the place where they were established and then
+run some code. The macro <CODE><B>HANDLER-CASE</B></CODE> establishes this kind of
+condition handler. The basic form of a <CODE><B>HANDLER-CASE</B></CODE> is as
+follows:</P><PRE>(handler-case <I>expression</I>
+  <I>error-clause</I>*)</PRE><P>where each <I>error-clause</I> is of the following form:</P><PRE>(<I>condition-type</I> ([<I>var</I>]) <I>code</I>)</PRE><P>If the <I>expression</I> returns normally, then its value is returned by
+the <CODE><B>HANDLER-CASE</B></CODE>. The body of a <CODE><B>HANDLER-CASE</B></CODE> must be a
+single expression; you can use <CODE><B>PROGN</B></CODE> to combine several
+expressions into a single form. If, however, the expression signals a
+condition that's an instance of any of the <I>condition-type</I>s
+specified in any <I>error-clause</I>, then the code in the appropriate
+error clause is executed and its value returned by the
+<CODE><B>HANDLER-CASE</B></CODE>. The <I>var</I>, if included, is the name of the
+variable that will hold the condition object when the handler code is
+executed. If the code doesn't need to access the condition object,
+you can omit the variable name.</P><P>For instance, one way to handle the <CODE>malformed-log-entry-error</CODE>
+signaled by <CODE>parse-log-entry</CODE> in its caller,
+<CODE>parse-log-file</CODE>, would be to skip the malformed entry. In the
+following function, the <CODE><B>HANDLER-CASE</B></CODE> expression will either
+return the value returned by <CODE>parse-log-entry</CODE> or return
+<CODE><B>NIL</B></CODE> if a <CODE>malformed-log-entry-error</CODE> is signaled. (The
+<CODE>it</CODE> in the <CODE><B>LOOP</B></CODE> clause <CODE>collect it</CODE> is another
+<CODE><B>LOOP</B></CODE> keyword, which refers to the value of the most recently
+evaluated conditional test, in this case the value of <CODE>entry</CODE>.)</P><PRE>(defun parse-log-file (file)
+  (with-open-file (in file :direction :input)
+    (loop for text = (read-line in nil nil) while text
+       for entry = (handler-case (parse-log-entry text)
+                     (malformed-log-entry-error () nil))
+       when entry collect it)))</PRE><P>When <CODE>parse-log-entry</CODE> returns normally, its value will be
+assigned to <CODE>entry</CODE> and collected by the <CODE><B>LOOP</B></CODE>. But if
+<CODE>parse-log-entry</CODE> signals a <CODE>malformed-log-entry-error</CODE>,
+then the error clause will return <CODE><B>NIL</B></CODE>, which won't be collected.</P><DIV CLASS="sidebarhead">JAVA-STYLE EXCEPTON HANDLING</DIV><DIV CLASS="sidebar"><P><CODE><B>HANDLER-CASE</B></CODE> is the nearest analog in Common Lisp to
+Java- or Python-style exception handling. Where you might write this
+in Java:</P><PRE>try {
+  doStuff();
+  doMoreStuff();
+} catch (SomeException se) {
+  recover(se);
+}</PRE><P>or this in Python:</P><PRE>try:
+  doStuff()
+  doMoreStuff()
+except SomeException, se:
+  recover(se)</PRE><P>in Common Lisp you'd write this:</P><PRE>(handler-case
+    (progn
+      (do-stuff)
+      (do-more-stuff))
+  (some-exception (se) (recover se)))</PRE></DIV><P>This version of <CODE>parse-log-file</CODE> has one serious deficiency:
+it's doing too much. As its name suggests, the job of
+<CODE>parse-log-file</CODE> is to parse the file and produce a list of
+<CODE>log-entry</CODE> objects; if it can't, it's not its place to decide
+what to do instead. What if you want to use <CODE>parse-log-file</CODE> in
+an application that wants to tell the user that the log file is
+corrupted or one that wants to recover from malformed entries by
+fixing them up and re-parsing them? Or maybe an application is fine
+with skipping them but only until a certain number of corrupted
+entries have been seen.</P><P>You could try to fix this problem by moving the <CODE><B>HANDLER-CASE</B></CODE> to
+a higher-level function. However, then you'd have no way to implement
+the current policy of skipping individual entries--when the error was
+signaled, the stack would be unwound all the way to the higher-level
+function, abandoning the parsing of the log file altogether. What you
+want is a way to provide the current recovery strategy without
+requiring that it always be used.</P><A NAME="restarts"><H2>Restarts</H2></A><P>The condition system lets you do this by splitting the error handling
+code into two parts. You place code that actually recovers from
+errors into <I>restarts</I>, and condition handlers can then handle a
+condition by invoking an appropriate restart. You can place restart
+code in mid- or low-level functions, such as <CODE>parse-log-file</CODE> or
+<CODE>parse-log-entry</CODE>, while moving the condition handlers into the
+upper levels of the application.</P><P>To change <CODE>parse-log-file</CODE> so it establishes a restart instead
+of a condition handler, you can change the <CODE><B>HANDLER-CASE</B></CODE> to a
+<CODE><B>RESTART-CASE</B></CODE>. The form of <CODE><B>RESTART-CASE</B></CODE> is quite similar to
+a <CODE><B>HANDLER-CASE</B></CODE> except the names of restarts are just names, not
+necessarily the names of condition types. In general, a restart name
+should describe the action the restart takes. In
+<CODE>parse-log-file</CODE>, you can call the restart <CODE>skip-log-entry</CODE>
+since that's what it does. The new version will look like this:</P><PRE>(defun parse-log-file (file)
+  (with-open-file (in file :direction :input)
+    (loop for text = (read-line in nil nil) while text
+       for entry = (restart-case (parse-log-entry text)
+                     (skip-log-entry () nil))
+       when entry collect it)))</PRE><P>If you invoke this version of <CODE>parse-log-file</CODE> on a log file
+containing corrupted entries, it won't handle the error directly;
+you'll end up in the debugger. However, there among the various
+restarts presented by the debugger will be one called
+<CODE>skip-log-entry</CODE>, which, if you choose it, will cause
+<CODE>parse-log-file</CODE> to continue on its way as before. To avoid
+ending up in the debugger, you can establish a condition handler that
+invokes the <CODE>skip-log-entry</CODE> restart automatically.</P><P>The advantage of establishing a restart rather than having
+<CODE>parse-log-file</CODE> handle the error directly is it makes
+<CODE>parse-log-file</CODE> usable in more situations. The higher-level
+code that invokes <CODE>parse-log-file</CODE> doesn't have to invoke the
+<CODE>skip-log-entry</CODE> restart. It can choose to handle the error at a
+higher level. Or, as I'll show in the next section, you can add
+restarts to <CODE>parse-log-entry</CODE> to provide other recovery
+strategies, and then condition handlers can choose which strategy
+they want to use.</P><P>But before I can talk about that, you need to see how to set up a
+condition handler that will invoke the <CODE>skip-log-entry</CODE> restart.
+You can set up the handler anywhere in the chain of calls leading to
+<CODE>parse-log-file</CODE>. This may be quite high up in your application,
+not necessarily in <CODE>parse-log-file</CODE>'s direct caller. For
+instance, suppose the main entry point to your application is a
+function, <CODE>log-analyzer</CODE>, that finds a bunch of logs and
+analyzes them with the function <CODE>analyze-log</CODE>, which eventually
+leads to a call to <CODE>parse-log-file</CODE>. Without any error handling,
+it might look like this:</P><PRE>(defun log-analyzer ()
+  (dolist (log (find-all-logs))
+    (analyze-log log)))</PRE><P>The job of <CODE>analyze-log</CODE> is to call, directly or indirectly,
+<CODE>parse-log-file</CODE> and then do something with the list of log
+entries returned. An extremely simple version might look like this:</P><PRE>(defun analyze-log (log)
+  (dolist (entry (parse-log-file log))
+    (analyze-entry entry)))</PRE><P>where the function <CODE>analyze-entry</CODE> is presumably responsible for
+extracting whatever information you care about from each log entry and
+stashing it away somewhere.</P><P>Thus, the path from the top-level function, <CODE>log-analyzer</CODE>, to
+<CODE>parse-log-entry</CODE>, which actually signals an error, is as
+follows:</P><P><IMG CLASS="figure" SRC="figures/restart-call-stack.png"/></P><P>Assuming you always want to skip malformed log entries, you could
+change this function to establish a condition handler that invokes
+the <CODE>skip-log-entry</CODE> restart for you. However, you can't use
+<CODE><B>HANDLER-CASE</B></CODE> to establish the condition handler because then the
+stack would be unwound to the function where the <CODE><B>HANDLER-CASE</B></CODE>
+appears. Instead, you need to use the lower-level macro
+<CODE><B>HANDLER-BIND</B></CODE>. The basic form of <CODE><B>HANDLER-BIND</B></CODE> is as follows:</P><PRE>(handler-bind (<I>binding</I>*) <I>form</I>*)</PRE><P>where each binding is a list of a condition type and a handler
+function of one argument. After the handler bindings, the body of the
+<CODE><B>HANDLER-BIND</B></CODE> can contain any number of forms. Unlike the handler
+code in <CODE><B>HANDLER-CASE</B></CODE>, the handler code must be a function
+object, and it must accept a single argument. A more important
+difference between <CODE><B>HANDLER-BIND</B></CODE> and <CODE><B>HANDLER-CASE</B></CODE> is that
+the handler function bound by <CODE><B>HANDLER-BIND</B></CODE> will be run without
+unwinding the stack--the flow of control will still be in the call to
+<CODE>parse-log-entry</CODE> when this function is called. The call to
+<CODE><B>INVOKE-RESTART</B></CODE> will find and invoke the most recently bound
+restart with the given name. So you can add a handler to
+<CODE>log-analyzer</CODE> that will invoke the <CODE>skip-log-entry</CODE>
+restart established in <CODE>parse-log-file</CODE> like this:<SUP>5</SUP></P><PRE>(defun log-analyzer ()
+  (handler-bind ((malformed-log-entry-error
+                  #'(lambda (c)
+                      (invoke-restart 'skip-log-entry))))
+    (dolist (log (find-all-logs))
+      (analyze-log log))))</PRE><P>In this <CODE><B>HANDLER-BIND</B></CODE>, the handler function is an anonymous
+function that invokes the restart <CODE>skip-log-entry</CODE>. You could
+also define a named function that does the same thing and bind it
+instead. In fact, a common practice when defining a restart is to
+define a function, with the same name and taking a single argument,
+the condition, that invokes the eponymous restart. Such functions are
+called <I>restart functions</I>. You could define a restart function for
+<CODE>skip-log-entry</CODE> like this:</P><PRE>(defun skip-log-entry (c)
+  (invoke-restart 'skip-log-entry))</PRE><P>Then you could change the definition of <CODE>log-analyzer</CODE> to this:</P><PRE>(defun log-analyzer ()
+  (handler-bind ((malformed-log-entry-error #'skip-log-entry))
+    (dolist (log (find-all-logs))
+      (analyze-log log))))</PRE><P>As written, the <CODE>skip-log-entry</CODE> restart function assumes that a
+<CODE>skip-log-entry</CODE> restart has been established. If a
+<CODE>malformed-log-entry-error</CODE> is ever signaled by code called from
+<CODE>log-analyzer</CODE> without a <CODE>skip-log-entry</CODE> having been
+established, the call to <CODE><B>INVOKE-RESTART</B></CODE> will signal a
+<CODE><B>CONTROL-ERROR</B></CODE> when it fails to find the <CODE>skip-log-entry</CODE>
+restart. If you want to allow for the possibility that a
+<CODE>malformed-log-entry-error</CODE> might be signaled from code that
+doesn't have a <CODE>skip-log-entry</CODE> restart established, you could
+change the <CODE>skip-log-entry</CODE> function to this:</P><PRE>(defun skip-log-entry (c)
+  (let ((restart (find-restart 'skip-log-entry)))
+    (when restart (invoke-restart restart))))</PRE><P><CODE><B>FIND-RESTART</B></CODE> looks for a restart with a given name and returns
+an object representing the restart if the restart is found and
+<CODE><B>NIL</B></CODE> if not. You can invoke the restart by passing the restart
+object to <CODE><B>INVOKE-RESTART</B></CODE>. Thus, when <CODE>skip-log-entry</CODE> is
+bound with <CODE><B>HANDLER-BIND</B></CODE>, it will handle the condition by
+invoking the <CODE>skip-log-entry</CODE> restart if one is available and
+otherwise will return normally, giving other condition handlers,
+bound higher on the stack, a chance to handle the condition.</P><A NAME="providing-multiple-restarts"><H2>Providing Multiple Restarts</H2></A><P>Since restarts must be explicitly invoked to have any effect, you can
+define multiple restarts, each providing a different recovery
+strategy. As I mentioned earlier, not all log-parsing applications
+will necessarily want to skip malformed entries. Some applications
+might want <CODE>parse-log-file</CODE> to include a special kind of object
+representing malformed entries in the list of <CODE>log-entry</CODE>
+objects; other applications may have some way to repair a malformed
+entry and may want a way to pass the fixed entry back to
+<CODE>parse-log-entry</CODE>.</P><P>To allow more complex recovery protocols, restarts can take arbitrary
+arguments, which are passed in the call to <CODE><B>INVOKE-RESTART</B></CODE>. You
+can provide support for both the recovery strategies I just mentioned
+by adding two restarts to <CODE>parse-log-entry</CODE>, each of which takes
+a single argument. One simply returns the value it's passed as the
+return value of <CODE>parse-log-entry</CODE>, while the other tries to
+parse its argument in the place of the original log entry.</P><PRE>(defun parse-log-entry (text)
+  (if (well-formed-log-entry-p text)
+    (make-instance 'log-entry ...)
+    (restart-case (error 'malformed-log-entry-error :text text)
+      (use-value (value) value)
+      (reparse-entry (fixed-text) (parse-log-entry fixed-text)))))</PRE><P>The name <CODE><B>USE-VALUE</B></CODE> is a standard name for this kind of restart.
+Common Lisp defines a restart function for <CODE><B>USE-VALUE</B></CODE> similar to
+the <CODE>skip-log-entry</CODE> function you just defined. So, if you
+wanted to change the policy on malformed entries to one that created
+an instance of <CODE>malformed-log-entry</CODE>, you could change
+<CODE>log-analyzer</CODE> to this (assuming the existence of a
+<CODE>malformed-log-entry</CODE> class with a <CODE>:text</CODE> initarg):</P><PRE>(defun log-analyzer ()
+  (handler-bind ((malformed-log-entry-error
+                  #'(lambda (c)
+                      (use-value
+                       (make-instance 'malformed-log-entry :text (text c))))))
+    (dolist (log (find-all-logs))
+      (analyze-log log))))</PRE><P>You could also have put these new restarts into <CODE>parse-log-file</CODE>
+instead of <CODE>parse-log-entry</CODE>. However, you generally want to put
+restarts in the lowest-level code possible. It wouldn't, though, be
+appropriate to move the <CODE>skip-log-entry</CODE> restart into
+<CODE>parse-log-entry</CODE> since that would cause <CODE>parse-log-entry</CODE>
+to sometimes return normally with <CODE><B>NIL</B></CODE>, the very thing you
+started out trying to avoid. And it'd be an equally bad idea to
+remove the <CODE>skip-log-entry</CODE> restart on the theory that the
+condition handler could get the same effect by invoking the
+<CODE>use-value</CODE> restart with <CODE><B>NIL</B></CODE> as the argument; that would
+require the condition handler to have intimate knowledge of how the
+<CODE>parse-log-file</CODE> works. As it stands, the <CODE>skip-log-entry</CODE>
+is a properly abstracted part of the log-parsing API.</P><A NAME="other-uses-for-conditions"><H2>Other Uses for Conditions</H2></A><P>While conditions are mainly used for error handling, they can be used
+for other purposes--you can use conditions, condition handlers, and
+restarts to build a variety of protocols between low- and high-level
+code. The key to understanding the potential of conditions is to
+understand that merely signaling a condition has no effect on the
+flow of control.</P><P>The primitive signaling function <CODE><B>SIGNAL</B></CODE> implements the mechanism
+of searching for an applicable condition handler and invoking its
+handler function. The reason a handler can decline to handle a
+condition by returning normally is because the call to the handler
+function is just a regular function call--when the handler returns,
+control passes back to <CODE><B>SIGNAL</B></CODE>, which then looks for another,
+less recently bound handler that can handle the condition. If
+<CODE><B>SIGNAL</B></CODE> runs out of condition handlers before the condition is
+handled, it also returns normally.</P><P>The <CODE><B>ERROR</B></CODE> function you've been using calls <CODE><B>SIGNAL</B></CODE>. If the
+error is handled by a condition handler that transfers control via
+<CODE><B>HANDLER-CASE</B></CODE> or by invoking a restart, then the call to
+<CODE><B>SIGNAL</B></CODE> never returns. But if <CODE><B>SIGNAL</B></CODE> returns, <CODE><B>ERROR</B></CODE>
+invokes the debugger by calling the function stored in
+<CODE><B>*DEBUGGER-HOOK*</B></CODE>. Thus, a call to <CODE><B>ERROR</B></CODE> can never return
+normally; the condition must be handled either by a condition handler
+or in the debugger.</P><P>Another condition signaling function, <CODE><B>WARN</B></CODE>, provides an example
+of a different kind of protocol built on the condition system. Like
+<CODE><B>ERROR</B></CODE>, <CODE><B>WARN</B></CODE> calls <CODE><B>SIGNAL</B></CODE> to signal a condition. But if
+<CODE><B>SIGNAL</B></CODE> returns, <CODE><B>WARN</B></CODE> doesn't invoke the debugger--it prints
+the condition to <CODE><B>*ERROR-OUTPUT*</B></CODE> and returns <CODE><B>NIL</B></CODE>, allowing
+its caller to proceed. <CODE><B>WARN</B></CODE> also establishes a restart,
+<CODE><B>MUFFLE-WARNING</B></CODE>, around the call to <CODE><B>SIGNAL</B></CODE> that can be used
+by a condition handler to make <CODE><B>WARN</B></CODE> return without printing
+anything. The restart function <CODE><B>MUFFLE-WARNING</B></CODE> finds and invokes
+its eponymous restart, signaling a <CODE><B>CONTROL-ERROR</B></CODE> if no such
+restart is available. Of course, a condition signaled with <CODE><B>WARN</B></CODE>
+could also be handled in some other way--a condition handler could
+&quot;promote&quot; a warning to an error by handling it as if it were an
+error.</P><P>For instance, in the log-parsing application, if there were ways a
+log entry could be slightly malformed but still parsable, you could
+write <CODE>parse-log-entry</CODE> to go ahead and parse the slightly
+defective entries but to signal a condition with <CODE><B>WARN</B></CODE> when it
+did. Then the larger application could choose to let the warning
+print, to muffle the warning, or to treat the warning like an error,
+recovering the same way it would from a
+<CODE>malformed-log-entry-error</CODE>.</P><P>A third error-signaling function, <CODE><B>CERROR</B></CODE>, provides yet another
+protocol. Like <CODE><B>ERROR</B></CODE>, <CODE><B>CERROR</B></CODE> will drop you into the
+debugger if the condition it signals isn't handled. But like
+<CODE><B>WARN</B></CODE>, it establishes a restart before it signals the condition.
+The restart, <CODE><B>CONTINUE</B></CODE>, causes <CODE><B>CERROR</B></CODE> to return normally--if
+the restart is invoked by a condition handler, it will keep you out
+of the debugger altogether. Otherwise, you can use the restart once
+you're in the debugger to resume the computation immediately after
+the call to <CODE><B>CERROR</B></CODE>. The function <CODE><B>CONTINUE</B></CODE> finds and invokes
+the <CODE><B>CONTINUE</B></CODE> restart if it's available and returns <CODE><B>NIL</B></CODE>
+otherwise.</P><P>You can also build your own protocols on <CODE><B>SIGNAL</B></CODE>--whenever
+low-level code needs to communicate information back up the call
+stack to higher-level code, the condition mechanism is a reasonable
+mechanism to use. But for most purposes, one of the standard error or
+warning protocols should suffice.</P><P>You'll use the condition system in future practical chapters, both
+for regular error handling and, in Chapter 25, to help in handling a
+tricky corner case of parsing ID3 files. Unfortunately, it's the fate
+of error handling to always get short shrift in programming
+texts--proper error handling, or lack thereof, is often the biggest
+difference between illustrative code and hardened, production-quality
+code. The trick to writing the latter has more to do with adopting a
+particularly rigorous way of thinking about software than with the
+details of any particular programming language constructs. That said,
+if your goal is to write that kind of software, you'll find the
+Common Lisp condition system is an excellent tool for writing robust
+code and one that fits quite nicely into Common Lisp's incremental
+development style.</P><DIV CLASS="sidebarhead">Writing Robust Software</DIV><DIV CLASS="sidebar"><P>For information on writing robust software, you could do
+worse than to start by finding a copy of <I>Software Reliability</I> 
+(John Wiley &amp; Sons, 1976) by Glenford J. Meyers. Bertrand Meyer's
+writings on Design By Contract also provide a useful way of thinking
+about software correctness. For instance, see Chapters 11 and 12 of
+his <I>Object-Oriented Software Construction</I> (Prentice Hall, 1997).
+Keep in mind, however, that Bertrand Meyer is the inventor of Eiffel,
+a statically typed bondage and discipline language in the Algol/Ada
+school. While he has a lot of smart things to say about object
+orientation and software reliability, there's a fairly wide gap
+between his view of programming and The Lisp Way. Finally, for an
+excellent overview of the larger issues surrounding building
+fault-tolerant systems, see Chapter 3 of the classic <I>Transaction
+Processing: Concepts and Techniques</I>  (Morgan Kaufmann, 1993) by Jim
+Gray and Andreas Reuter.</P></DIV><P>In the next chapter I'll give a quick overview of some of the 25
+special operators you haven't had a chance to use yet, at least not
+directly.
+</P><HR/><DIV CLASS="notes"><P><SUP>1</SUP><I>Throws</I> or <I>raises</I> an exception in
+Java/Python terms</P><P><SUP>2</SUP><I>Catches</I> the
+exception in Java/Python terms</P><P><SUP>3</SUP>In this respect, a condition is a lot
+like an exception in Java or Python except not all conditions
+represent an error or <I>exceptional</I> situation.</P><P><SUP>4</SUP>In some Common Lisp implementations,
+conditions are defined as subclasses of <CODE><B>STANDARD-OBJECT</B></CODE>, in
+which case <CODE><B>SLOT-VALUE</B></CODE>, <CODE><B>MAKE-INSTANCE</B></CODE>, and
+<CODE><B>INITIALIZE-INSTANCE</B></CODE> will work, but it's not portable to rely on
+it.</P><P><SUP>5</SUP>The
+compiler may complain if the parameter is never used. You can silence
+that warning by adding a declaration <CODE>(declare (ignore c))</CODE> as
+the first expression in the <CODE><B>LAMBDA</B></CODE> body.</P></DIV></BODY></HTML>

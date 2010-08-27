@@ -1,0 +1,863 @@
+<HTML><HEAD><TITLE>Practical: An MP3 Browser</TITLE><LINK REL="stylesheet" TYPE="text/css" HREF="style.css"/></HEAD><BODY><DIV CLASS="copyright">Copyright &copy; 2003-2005, Peter Seibel</DIV><H1>29. Practical: An MP3 Browser</H1><P>The final step in building the MP3 streaming application is to provide
+a Web interface that allows a user to find the songs they want to
+listen to and add them to a playlist that the Shoutcast server will
+draw upon when the user's MP3 client requests the stream URL. For this
+component of the application, you'll pull together several bits of
+code from the previous few chapters: the MP3 database, the
+<CODE>define-url-function</CODE> macro from Chapter 26, and, of course, the
+Shoutcast server itself.</P><A NAME="playlists"><H2>Playlists</H2></A><P>The basic idea behind the interface will be that each MP3 client that
+connects to the Shoutcast server gets its own <I>playlist</I>, which
+serves as the source of songs for the Shoutcast server. A playlist
+will also provide facilities beyond those needed by the Shoutcast
+server: through the Web interface the user will be able to add songs
+to the playlist, delete songs already in the playlist, and reorder
+the playlist by sorting and shuffling.</P><P>You can define a class to represent playlists like this:</P><PRE>(defclass playlist ()
+  ((id           :accessor id           :initarg :id)
+   (songs-table  :accessor songs-table  :initform (make-playlist-table))
+   (current-song :accessor current-song :initform *empty-playlist-song*)
+   (current-idx  :accessor current-idx  :initform 0)
+   (ordering     :accessor ordering     :initform :album)
+   (shuffle      :accessor shuffle      :initform :none)
+   (repeat       :accessor repeat       :initform :none)
+   (user-agent   :accessor user-agent   :initform &quot;Unknown&quot;)
+   (lock         :reader   lock         :initform (make-process-lock))))</PRE><P>The <CODE>id</CODE> of a playlist is the key you extract from the request
+object passed to <CODE>find-song-source</CODE> when looking up a playlist.
+You don't actually need to store it in the <CODE>playlist</CODE> object,
+but it makes debugging a bit easier if you can find out from an
+arbitrary playlist object what its <CODE>id</CODE> is.</P><P>The heart of the playlist is the <CODE>songs-table</CODE> slot, which will
+hold a <CODE>table</CODE> object. The schema for this table will be the
+same as for the main MP3 database. The function
+<CODE>make-playlist-table</CODE>, which you use to initialize
+<CODE>songs-table</CODE>, is simply this:</P><PRE>(defun make-playlist-table ()
+  (make-instance 'table :schema *mp3-schema*))</PRE><DIV CLASS="sidebarhead">The Package</DIV><DIV CLASS="sidebar"><P>You can define the package for the code in this chapter with
+the following <CODE><B>DEFPACKAGE</B></CODE>:</P><PRE>(defpackage :com.gigamonkeys.mp3-browser
+  (:use :common-lisp
+        :net.aserve
+        :com.gigamonkeys.html
+        :com.gigamonkeys.shoutcast
+        :com.gigamonkeys.url-function
+        :com.gigamonkeys.mp3-database
+        :com.gigamonkeys.id3v2)
+  (:import-from :acl-socket
+                :ipaddr-to-dotted
+                :remote-host)
+  (:import-from :multiprocessing
+                :make-process-lock
+                :with-process-lock)
+  (:export :start-mp3-browser))</PRE><P>Because this is a high-level application, it uses a lot of lower-level
+packages. It also imports three symbols from the <CODE>ACL-SOCKET</CODE>
+package and two more from <CODE>MULTIPROCESSING</CODE> since it just needs
+those five and not the other 139 symbols those two packages export.</P></DIV><P>By storing the list of songs as a table, you can use the database
+functions from Chapter 27 to manipulate the playlist: you can add to
+the playlist with <CODE>insert-row</CODE>, delete songs with
+<CODE>delete-rows</CODE>, and reorder the playlist with <CODE>sort-rows</CODE>
+and <CODE>shuffle-table</CODE>.</P><P>The <CODE>current-song</CODE> and <CODE>current-idx</CODE> slots keep track of
+which song is playing: <CODE>current-song</CODE> is an actual <CODE>song</CODE>
+object, while <CODE>current-idx</CODE> is the index into the
+<CODE>songs-table</CODE> of the row representing the current song. You'll
+see in the section &quot;Manipulating the Playlist&quot; how to make sure
+<CODE>current-song</CODE> is updated whenever <CODE>current-idx</CODE> changes.</P><P>The <CODE>ordering</CODE> and <CODE>shuffle</CODE> slots hold information about
+how the songs in <CODE>songs-table</CODE> are to be ordered. The
+<CODE>ordering</CODE> slot holds a keyword that tells how the
+<CODE>songs-table</CODE> should be sorted when it's not shuffled. The legal
+values are <CODE>:genre</CODE>, <CODE>:artist</CODE>, <CODE>:album</CODE>, and
+<CODE>:song</CODE>. The <CODE>shuffle</CODE> slot holds one of the keywords
+<CODE>:none</CODE>, <CODE>:song</CODE>, or <CODE>:album</CODE>, which specifies how
+<CODE>songs-table</CODE> should be shuffled, if at all.</P><P>The <CODE>repeat</CODE> slot also holds a keyword, one of <CODE>:none</CODE>,
+<CODE>:song</CODE>, or <CODE>:all</CODE>, which specifies the repeat mode for the
+playlist. If <CODE>repeat</CODE> is <CODE>:none</CODE>, after the last song in
+the <CODE>songs-table</CODE> has been played, the <CODE>current-song</CODE> goes
+back to a default MP3. When <CODE>:repeat</CODE> is <CODE>:song</CODE>, the
+playlist keeps returning the same <CODE>current-song</CODE> forever. And if
+it's <CODE>:all</CODE>, after the last song, <CODE>current-song</CODE> goes back
+to the first song.</P><P>The <CODE>user-agent</CODE> slot holds the value of the User-Agent header
+sent by the MP3 client in its request for the stream. You need to
+hold onto this value purely for use in the Web interface--the
+User-Agent header identifies the program that made the request, so
+you can display the value on the page that lists all the playlists to
+make it easier to tell which playlist goes with which connection when
+multiple clients connect.</P><P>Finally, the <CODE>lock</CODE> slot holds a <I>process lock</I> created with
+the function <CODE>make-process-lock</CODE>, which is part of Allegro's
+<CODE>MULTIPROCESSING</CODE> package. You'll need to use that lock in
+certain functions that manipulate <CODE>playlist</CODE> objects to ensure
+that only one thread at a time manipulates a given playlist object.
+You can define the following macro, built upon the
+<CODE>with-process-lock</CODE> macro from <CODE>MULTIPROCESSING</CODE>, to give
+an easy way to wrap a body of code that should be performed while
+holding a playlist's lock:</P><PRE>(defmacro with-playlist-locked ((playlist) &amp;body body)
+  `(with-process-lock ((lock ,playlist))
+     ,@body))</PRE><P>The  <CODE>with-process-lock</CODE> macro acquires exclusive access to the
+process lock given and then executes the body forms, releasing the
+lock afterward. By default, <CODE>with-process-lock</CODE> allows recursive
+locks, meaning the same thread can safely acquire the same lock
+multiple times.</P><A NAME="playlists-as-song-sources"><H2>Playlists As Song Sources</H2></A><P>To use <CODE>playlist</CODE>s as a source of songs for the Shoutcast server,
+you'll need to implement a method on the generic function
+<CODE>find-song-source</CODE> from Chapter 28. Since you're going to have
+multiple playlists, you need a way to find the right one for each
+client that connects to the server. The mapping part is easy--you can
+define a variable that holds an <CODE><B>EQUAL</B></CODE> hash table that you can
+use to map from some identifier to the <CODE>playlist</CODE> object.</P><PRE>(defvar *playlists* (make-hash-table :test #'equal))</PRE><P>You'll also need to define a process lock to protect access to this
+hash table like this:</P><PRE>(defparameter *playlists-lock* (make-process-lock :name &quot;playlists-lock&quot;))</PRE><P>Then define a function that looks up a playlist given an ID, creating
+a new <CODE>playlist</CODE> object if necessary and using
+<CODE>with-process-lock</CODE> to ensure that only one thread at a time
+manipulates the hash table.<SUP>1</SUP></P><PRE>(defun lookup-playlist (id)
+  (with-process-lock (*playlists-lock*)
+    (or (gethash id *playlists*)
+        (setf (gethash id *playlists*) (make-instance 'playlist :id id)))))</PRE><P>Then you can implement <CODE>find-song-source</CODE> on top of that
+function and another, <CODE>playlist-id</CODE>, that takes an AllegroServe
+request object and returns the appropriate playlist identifier. The
+<CODE>find-song-source</CODE> function is also where you grab the
+User-Agent string out of the request object and stash it in the
+playlist object.</P><PRE>(defmethod find-song-source ((type (eql 'playlist)) request)
+  (let ((playlist (lookup-playlist (playlist-id request))))
+    (with-playlist-locked (playlist)
+      (let ((user-agent (header-slot-value request :user-agent)))
+        (when user-agent (setf (user-agent playlist) user-agent))))
+    playlist))</PRE><P>The trick, then, is how you implement <CODE>playlist-id</CODE>, the
+function that extracts the identifier from the request object. You
+have a couple options, each with different implications for the user
+interface. You can pull whatever information you want out of the
+request object, but however you decide to identify the client, you
+need some way for the user of the Web interface to get hooked up to
+the right playlist.</P><P>For now you can take an approach that &quot;just works&quot; as long as there's
+only one MP3 client per machine connecting to the server and as long
+as the user is browsing the Web interface from the machine running
+the MP3 client: you'll use the IP address of the client machine as
+the identifier. This way you can find the right playlist for a
+request regardless of whether the request is from the MP3 client or a
+Web browser. You will, however, provide a way in the Web interface to
+select a different playlist from the browser, so the only real
+constraint this choice puts on the application is that there can be
+only one connected MP3 client per client IP address.<SUP>2</SUP> The implementation of <CODE>playlist-id</CODE> looks like this:</P><PRE>(defun playlist-id (request)
+  (ipaddr-to-dotted (remote-host (request-socket request))))</PRE><P>The function <CODE>request-socket</CODE> is part of AllegroServe, while
+<CODE>remote-host</CODE> and <CODE>ipaddr-to-dotted</CODE> are part of Allegro's
+socket library.</P><P>To make a playlist usable as a song source by the Shoutcast server,
+you need to define methods on <CODE>current-song</CODE>,
+<CODE>still-current-p</CODE>, and <CODE>maybe-move-to-next-song</CODE> that
+specialize their <CODE>source</CODE> parameter on <CODE>playlist</CODE>. The
+<CODE>current-song</CODE> method is already taken care of: by defining the
+accessor <CODE>current-song</CODE> on the eponymous slot, you automatically
+got a <CODE>current-song</CODE> method specialized on <CODE>playlist</CODE> that
+returns the value of that slot. However, to make accesses to the
+<CODE>playlist</CODE> thread safe, you need to lock the <CODE>playlist</CODE>
+before accessing the <CODE>current-song</CODE> slot. In this case, the
+easiest way is to define an <CODE>:around</CODE> method like the following:</P><PRE>(defmethod current-song :around ((playlist playlist))
+  (with-playlist-locked (playlist) (call-next-method)))</PRE><P>Implementing <CODE>still-current-p</CODE> is also quite simple, assuming
+you can be sure that <CODE>current-song</CODE> gets updated with a new
+<CODE>song</CODE> object only when the current song actually changes.
+Again, you need to acquire the process lock to ensure you get a
+consistent view of the <CODE>playlist</CODE>'s state.</P><PRE>(defmethod still-current-p (song (playlist playlist))
+  (with-playlist-locked (playlist)
+    (eql song (current-song playlist))))</PRE><P>The trick, then, is to make sure the <CODE>current-song</CODE> slot gets
+updated at the right times. However, the current song can change in a
+number of ways. The obvious one is when the Shoutcast server calls
+<CODE>maybe-move-to-next-song</CODE>. But it can also change when songs are
+added to the playlist, when the Shoutcast server has run out of
+songs, or even if the playlist's repeat mode is changed.</P><P>Rather than trying to write code specific to every situation to
+determine whether to update <CODE>current-song</CODE>, you can define a
+function, <CODE>update-current-if-necessary</CODE>, that updates
+<CODE>current-song</CODE> if the <CODE>song</CODE> object in <CODE>current-song</CODE>
+no longer matches the file that the <CODE>current-idx</CODE> slot says
+should be playing. Then, if you call this function after any
+manipulation of the playlist that could possibly put those two slots
+out of sync, you're sure to keep <CODE>current-song</CODE> set properly.
+Here are <CODE>update-current-if-necessary</CODE> and its helper functions:</P><PRE>(defun update-current-if-necessary (playlist)
+  (unless (equal (file (current-song playlist))
+                 (file-for-current-idx playlist))
+    (reset-current-song playlist)))
+
+(defun file-for-current-idx (playlist)
+  (if (at-end-p playlist)
+    nil
+    (column-value (nth-row (current-idx playlist) (songs-table playlist)) :file)))
+
+(defun at-end-p (playlist)
+  (&gt;= (current-idx playlist) (table-size (songs-table playlist))))</PRE><P>You don't need to add locking to these functions since they'll be
+called only from functions that will take care of locking the
+playlist first.</P><P>The function <CODE>reset-current-song</CODE> introduces one more wrinkle:
+because you want the playlist to provide an endless stream of MP3s to
+the client, you don't want to ever set <CODE>current-song</CODE> to
+<CODE><B>NIL</B></CODE>. Instead, when a playlist runs out of songs to play--when
+<CODE>songs-table</CODE> is empty or after the last song has been played
+and <CODE>repeat</CODE> is set to <CODE>:none</CODE>--then you need to set
+<CODE>current-song</CODE> to a special song whose file is an MP3 of
+silence<SUP>3</SUP> and whose title
+explains why no music is playing. Here's some code to define two
+parameters, <CODE>*empty-playlist-song*</CODE> and
+<CODE>*end-of-playlist-song*</CODE>, each set to a song with the file named
+by <CODE>*silence-mp3*</CODE> as their file and an appropriate title:</P><PRE>(defparameter *silence-mp3* ...)
+
+(defun make-silent-song (title &amp;optional (file *silence-mp3*))
+  (make-instance
+   'song 
+   :file file
+   :title title
+   :id3-size (if (id3-p file) (size (read-id3 file)) 0)))
+
+(defparameter *empty-playlist-song* (make-silent-song &quot;Playlist empty.&quot;))
+
+(defparameter *end-of-playlist-song* (make-silent-song &quot;At end of playlist.&quot;))</PRE><P><CODE>reset-current-song</CODE> uses these parameters when the
+<CODE>current-idx</CODE> doesn't point to a row in <CODE>songs-table</CODE>.
+Otherwise, it sets <CODE>current-song</CODE> to a <CODE>song</CODE> object
+representing the current row.</P><PRE>(defun reset-current-song (playlist)
+  (setf
+   (current-song playlist) 
+   (cond
+     ((empty-p playlist) *empty-playlist-song*)
+     ((at-end-p playlist) *end-of-playlist-song*)
+     (t (row-&gt;song (nth-row (current-idx playlist) (songs-table playlist)))))))
+
+(defun row-&gt;song (song-db-entry)
+  (with-column-values (file song artist album id3-size) song-db-entry
+    (make-instance
+     'song
+     :file file
+     :title (format nil &quot;~a by ~a from ~a&quot; song artist album)
+     :id3-size id3-size)))
+
+(defun empty-p (playlist)
+  (zerop (table-size (songs-table playlist))))</PRE><P>Now, at last, you can implement the method on
+<CODE>maybe-move-to-next-song</CODE> that moves <CODE>current-idx</CODE> to its
+next value, based on the playlist's repeat mode, and then calls
+<CODE>update-current-if-necessary</CODE>. You don't change
+<CODE>current-idx</CODE> when it's already at the end of the playlist
+because you want it to keep its current value, so it'll point at the
+next song you add to the playlist. This function must lock the
+playlist before manipulating it since it's called by the Shoutcast
+server code, which doesn't do any locking.</P><PRE>(defmethod maybe-move-to-next-song (song (playlist playlist))
+  (with-playlist-locked (playlist)
+    (when (still-current-p song playlist)
+      (unless (at-end-p playlist)
+        (ecase (repeat playlist)
+          (:song) ; nothing changes
+          (:none (incf (current-idx playlist)))
+          (:all  (setf (current-idx playlist)
+                       (mod (1+ (current-idx playlist))
+                            (table-size (songs-table playlist)))))))
+      (update-current-if-necessary playlist))))</PRE><A NAME="manipulating-the-playlist"><H2>Manipulating the Playlist</H2></A><P>The rest of the playlist code is functions used by the Web interface
+to manipulate <CODE>playlist</CODE> objects, including adding and deleting
+songs, sorting and shuffling, and setting the repeat mode. As in the
+helper functions in the previous section, you don't need to worry
+about locking in these functions because, as you'll see, the lock
+will be acquired in the Web interface function that calls these.</P><P>Adding and deleting is mostly a question of manipulating the
+<CODE>songs-table</CODE>. The only extra work you have to do is to keep the
+<CODE>current-song</CODE> and <CODE>current-idx</CODE> in sync. For instance,
+whenever the playlist is empty, its <CODE>current-idx</CODE> will be zero,
+and the <CODE>current-song</CODE> will be the <CODE>*empty-playlist-song*</CODE>.
+If you add a song to an empty playlist, then the index of zero is now
+in bounds, and you should change the <CODE>current-song</CODE> to the newly
+added song. By the same token, when you've played all the songs in a
+playlist and <CODE>current-song</CODE> is <CODE>*end-of-playlist-song*</CODE>,
+adding a song should cause <CODE>current-song</CODE> to be reset. All this
+really means, though, is that you need to call
+<CODE>update-current-if-necessary</CODE> at the appropriate points.</P><P>Adding songs to a playlist is a bit involved because of the way the
+Web interface communicates which songs to add. For reasons I'll
+discuss in the next section, the Web interface code can't just give
+you a simple set of criteria to use in selecting songs from the
+database. Instead, it gives you the name of a column and a list of
+values, and you're supposed to add all the songs from the main
+database where the given column has a value in the list of values.
+Thus, to add the right songs, you need to first build a table object
+containing the desired values, which you can then use with an
+<CODE>in</CODE> query against the song database. So, <CODE>add-songs</CODE> looks
+like this:</P><PRE>(defun add-songs (playlist column-name values)
+  (let ((table (make-instance
+                'table 
+                :schema (extract-schema (list column-name) (schema *mp3s*)))))
+    (dolist (v values) (insert-row (list column-name v) table))
+    (do-rows (row (select :from *mp3s* :where (in column-name table)))
+      (insert-row row (songs-table playlist))))
+  (update-current-if-necessary playlist))</PRE><P>Deleting songs is a bit simpler; you just need to be able to delete
+songs from the <CODE>songs-table</CODE> that match particular
+criteria--either a particular song or all songs in a particular
+genre, by a particular artist, or from a particular album. So, you
+can provide a <CODE>delete-songs</CODE> function that takes keyword/value
+pairs, which are used to construct a <CODE>matching</CODE> <CODE>:where</CODE>
+clause you can pass to the <CODE>delete-rows</CODE> database function.</P><P>Another complication that arises when deleting songs is that
+<CODE>current-idx</CODE> may need to change. Assuming the current song
+isn't one of the ones just deleted, you'd like it to remain the
+current song. But if songs before it in <CODE>songs-table</CODE> are
+deleted, it'll be in a different position in the table after the
+delete. So after a call to <CODE>delete-rows</CODE>, you need to look for
+the row containing the current song and reset <CODE>current-idx</CODE>. If
+the current song has itself been deleted, then, for lack of anything
+better to do, you can reset <CODE>current-idx</CODE> to zero. After
+updating <CODE>current-idx</CODE>, calling
+<CODE>update-current-if-necessary</CODE> will take care of updating
+<CODE>current-song</CODE>. And if <CODE>current-idx</CODE> changed but still
+points at the same song, <CODE>current-song</CODE> will be left alone.</P><PRE>(defun delete-songs (playlist &amp;rest names-and-values)
+  (delete-rows
+   :from (songs-table playlist)
+   :where (apply #'matching (songs-table playlist) names-and-values))
+  (setf (current-idx playlist) (or (position-of-current playlist) 0))
+  (update-current-if-necessary playlist))
+
+(defun position-of-current (playlist)
+  (let* ((table (songs-table playlist))
+         (matcher (matching table :file (file (current-song playlist))))
+         (pos 0))
+    (do-rows (row table)
+      (when (funcall matcher row)
+        (return-from position-of-current pos))
+      (incf pos))))</PRE><P>You can also provide a function to completely clear the playlist,
+which uses <CODE>delete-all-rows</CODE> and doesn't have to worry about
+finding the current song since it has obviously been deleted. The
+call to <CODE>update-current-if-necessary</CODE> will take care of setting
+<CODE>current-song</CODE> to <CODE><B>NIL</B></CODE>.</P><PRE>(defun clear-playlist (playlist)
+  (delete-all-rows (songs-table playlist))
+  (setf (current-idx playlist) 0)
+  (update-current-if-necessary playlist))</PRE><P>Sorting and shuffling the playlist are related in that the playlist is
+always either sorted <I>or</I> shuffled. The <CODE>shuffle</CODE> slot says
+whether the playlist should be shuffled and if so how. If it's set to
+<CODE>:none</CODE>, then the playlist is ordered according to the value in
+the <CODE>ordering</CODE> slot. When <CODE>shuffle</CODE> is <CODE>:song</CODE>, the
+playlist will be randomly permuted. And when it's set to
+<CODE>:album</CODE>, the list of albums is randomly permuted, but the songs
+within each album are listed in track order. Thus, the
+<CODE>sort-playlist</CODE> function, which will be called by the Web
+interface code whenever the user selects a new ordering, needs to set
+<CODE>ordering</CODE> to the desired ordering and set <CODE>shuffle</CODE> to
+<CODE>:none</CODE> before calling <CODE>order-playlist</CODE>, which actually
+does the sort. As in <CODE>delete-songs</CODE>, you need to use
+<CODE>position-of-current</CODE> to reset <CODE>current-idx</CODE> to the new
+location of the current song. However, this time you don't need to
+call <CODE>update-current-if-necessary</CODE> since you know the current
+song is still in the table.</P><PRE>(defun sort-playlist (playlist ordering)
+  (setf (ordering playlist) ordering)
+  (setf (shuffle playlist) :none)
+  (order-playlist playlist)
+  (setf (current-idx playlist) (position-of-current playlist)))</PRE><P>In <CODE>order-playlist</CODE>, you can use the database function
+<CODE>sort-rows</CODE> to actually perform the sort, passing a list of
+columns to sort by based on the value of <CODE>ordering</CODE>.</P><PRE>(defun order-playlist (playlist)
+  (apply #'sort-rows (songs-table playlist)
+    (case (ordering playlist)
+      (:genre  '(:genre :album :track))
+      (:artist '(:artist :album :track))
+      (:album  '(:album :track))
+      (:song   '(:song)))))</PRE><P>The function <CODE>shuffle-playlist</CODE>, called by the Web interface
+code when the user selects a new shuffle mode, works in a similar
+fashion except it doesn't need to change the value of
+<CODE>ordering</CODE>. Thus, when <CODE>shuffle-playlist</CODE> is called with a
+<CODE>shuffle</CODE> of <CODE>:none</CODE>, the playlist goes back to being
+sorted according to the most recent ordering. Shuffling by songs is
+simple--just call <CODE>shuffle-table</CODE> on <CODE>songs-table</CODE>.
+Shuffling by albums is a bit more involved but still not rocket
+science.</P><PRE>(defun shuffle-playlist (playlist shuffle)
+  (setf (shuffle playlist) shuffle)
+  (case shuffle
+    (:none (order-playlist playlist))
+    (:song (shuffle-by-song playlist))
+    (:album (shuffle-by-album playlist)))
+  (setf (current-idx playlist) (position-of-current playlist)))
+
+(defun shuffle-by-song (playlist)
+  (shuffle-table (songs-table playlist)))
+
+(defun shuffle-by-album (playlist)
+  (let ((new-table (make-playlist-table)))
+    (do-rows (album-row (shuffled-album-names playlist))
+      (do-rows (song (songs-for-album playlist (column-value album-row :album)))
+        (insert-row song new-table)))
+    (setf (songs-table playlist) new-table)))
+
+(defun shuffled-album-names (playlist)
+  (shuffle-table 
+   (select
+    :columns :album
+    :from (songs-table playlist)
+    :distinct t)))
+
+(defun songs-for-album (playlist album)
+  (select
+   :from (songs-table playlist) 
+   :where (matching (songs-table playlist) :album album)
+   :order-by :track))</PRE><P>The last manipulation you need to support is setting the playlist's
+repeat mode. Most of the time you don't need to take any extra action
+when setting <CODE>repeat</CODE>--its value comes into play only in
+<CODE>maybe-move-to-next-song</CODE>. However, you need to update the
+<CODE>current-song</CODE> as a result of changing <CODE>repeat</CODE> in one
+situation, namely, if <CODE>current-idx</CODE> is at the end of a nonempty
+playlist and <CODE>repeat</CODE> is being changed to <CODE>:song</CODE> or
+<CODE>:all</CODE>. In that case, you want to continue playing, either
+repeating the last song or starting at the beginning of the playlist.
+So, you should define an <CODE>:after</CODE> method on the generic function
+<CODE>(setf repeat)</CODE>.</P><PRE>(defmethod (setf repeat) :after (value (playlist playlist))
+  (if (and (at-end-p playlist) (not (empty-p playlist)))
+    (ecase value
+      (:song (setf (current-idx playlist) (1- (table-size (songs-table playlist)))))
+      (:none)
+      (:all  (setf (current-idx playlist) 0)))
+    (update-current-if-necessary playlist)))</PRE><P>Now you have all the underlying bits you need. All that remains is
+the code that will provide a Web-based user interface for browsing
+the MP3 database and manipulating playlists. The interface will
+consist of three main functions defined with
+<CODE>define-url-function</CODE>: one for browsing the song database, one
+for viewing and manipulating a single playlist, and one for listing
+all the available playlists.</P><P>But before you get to writing these three functions, you need to
+start with some helper functions and HTML macros that they'll use.</P><A NAME="query-parameter-types"><H2>Query Parameter Types</H2></A><P>Since you'll be using <CODE>define-url-function</CODE>, you need to define
+a few methods on the <CODE>string-&gt;type</CODE> generic function from
+Chapter 28 that <CODE>define-url-function</CODE> uses to convert string
+query parameters into Lisp objects. In this application, you'll need
+methods to convert strings to integers, keyword symbols, and a list
+of values.</P><P>The first two are quite simple.</P><PRE>(defmethod string-&gt;type ((type (eql 'integer)) value)
+  (parse-integer (or value &quot;&quot;) :junk-allowed t))
+
+(defmethod string-&gt;type ((type (eql 'keyword)) value)
+  (and (plusp (length value)) (intern (string-upcase value) :keyword)))</PRE><P>The last <CODE>string-&gt;type</CODE> method is slightly more complex. For
+reasons I'll get to in a moment, you'll need to generate pages that
+display a form that contains a hidden field whose value is a list of
+strings. Since you're responsible for generating the value in the
+hidden field <I>and</I> for parsing it when it comes back, you can use
+whatever encoding is convenient. You could use the functions
+<CODE><B>WRITE-TO-STRING</B></CODE> and <CODE><B>READ-FROM-STRING</B></CODE>, which use the Lisp
+printer and reader to write and read data to and from strings, except
+the printed representation of strings can contain quotation marks and
+other characters that may cause problems when embedded in the value
+attribute of an <CODE>INPUT</CODE> element. So, you'll need to escape those
+characters somehow. Rather than trying to come up with your own
+escaping scheme, you can just use base 64, an encoding commonly used
+to protect binary data sent through e-mail. AllegroServe comes with
+two functions, <CODE>base64-encode</CODE> and <CODE>base64-decode</CODE>, that do
+the encoding and decoding for you, so all you have to do is write a
+pair of functions: one that encodes a Lisp object by converting it to
+a readable string with <CODE><B>WRITE-TO-STRING</B></CODE> and then base 64 encoding
+it and, conversely, another to decode such a string by base 64
+decoding it and passing the result to <CODE><B>READ-FROM-STRING</B></CODE>. You'll
+want to wrap the calls to <CODE><B>WRITE-TO-STRING</B></CODE> and
+<CODE><B>READ-FROM-STRING</B></CODE> in <CODE><B>WITH-STANDARD-IO-SYNTAX</B></CODE> to make sure
+all the variables that affect the printer and reader are set to their
+standard values. However, because you're going to be reading data
+that's coming in from the network, you'll definitely want to turn off
+one feature of the reader--the ability to evaluate arbitrary Lisp
+code while reading!<SUP>4</SUP> You can define your own macro <CODE>with-safe-io-syntax</CODE>,
+which wraps its body forms in <CODE><B>WITH-STANDARD-IO-SYNTAX</B></CODE> wrapped
+around a <CODE><B>LET</B></CODE> that binds <CODE><B>*READ-EVAL*</B></CODE> to <CODE><B>NIL</B></CODE>.</P><PRE>(defmacro with-safe-io-syntax (&amp;body body)
+  `(with-standard-io-syntax
+     (let ((*read-eval* nil))
+       ,@body)))</PRE><P>Then the encoding and decoding functions are trivial.</P><PRE>(defun obj-&gt;base64 (obj)
+  (base64-encode (with-safe-io-syntax (write-to-string obj))))
+
+(defun base64-&gt;obj (string)
+  (ignore-errors
+    (with-safe-io-syntax (read-from-string (base64-decode string)))))</PRE><P>Finally, you can use these functions to define a method on
+<CODE>string-&gt;type</CODE> that defines the conversion for the query
+parameter type <CODE>base64-list</CODE>.</P><PRE>(defmethod string-&gt;type ((type (eql 'base-64-list)) value)
+  (let ((obj (base64-&gt;obj value)))
+    (if (listp obj) obj nil)))</PRE><A NAME="boilerplate-html"><H2>Boilerplate HTML</H2></A><P>Next you need to define some HTML macros and helper functions to make
+it easy to give the different pages in the application a consistent
+look and feel. You can start with an HTML macro that defines the
+basic structure of a page in the application.</P><PRE>(define-html-macro :mp3-browser-page ((&amp;key title (header title)) &amp;body body)
+  `(:html
+     (:head
+      (:title ,title)
+      (:link :rel &quot;stylesheet&quot; :type &quot;text/css&quot; :href &quot;mp3-browser.css&quot;))
+     (:body
+      (standard-header)
+      (when ,header (html (:h1 :class &quot;title&quot; ,header)))
+      ,@body
+      (standard-footer))))</PRE><P>You should define <CODE>standard-header</CODE> and <CODE>standard-footer</CODE>
+as separate functions for two reasons. First, during development you
+can redefine those functions and see the effect immediately without
+having to recompile functions that use the <CODE>:mp3-browser-page</CODE>
+macro. Second, it turns out that one of the pages you'll write later
+won't be defined with <CODE>:mp3-browser-page</CODE> but will still need
+the standard header and footers. They look like this:</P><PRE>(defparameter *r* 25)
+
+(defun standard-header ()
+  (html
+   ((:p :class &quot;toolbar&quot;)
+    &quot;[&quot; (:a :href (link &quot;/browse&quot; :what &quot;genre&quot;) &quot;All genres&quot;) &quot;] &quot;
+    &quot;[&quot; (:a :href (link &quot;/browse&quot; :what &quot;genre&quot; :random *r*) &quot;Random genres&quot;) &quot;] &quot;
+    &quot;[&quot; (:a :href (link &quot;/browse&quot; :what &quot;artist&quot;) &quot;All artists&quot;) &quot;] &quot;
+    &quot;[&quot; (:a :href (link &quot;/browse&quot; :what &quot;artist&quot; :random *r*) &quot;Random artists&quot;) &quot;] &quot;
+    &quot;[&quot; (:a :href (link &quot;/browse&quot; :what &quot;album&quot;) &quot;All albums&quot;) &quot;] &quot;
+    &quot;[&quot; (:a :href (link &quot;/browse&quot; :what &quot;album&quot; :random *r*) &quot;Random albums&quot;) &quot;] &quot;
+    &quot;[&quot; (:a :href (link &quot;/browse&quot; :what &quot;song&quot; :random *r*) &quot;Random songs&quot;) &quot;] &quot;
+    &quot;[&quot; (:a :href (link &quot;/playlist&quot;) &quot;Playlist&quot;) &quot;] &quot;
+    &quot;[&quot; (:a :href (link &quot;/all-playlists&quot;) &quot;All playlists&quot;) &quot;]&quot;)))
+
+(defun standard-footer ()
+  (html (:hr) ((:p :class &quot;footer&quot;) &quot;MP3 Browser v&quot; *major-version* &quot;.&quot; *minor-version*)))</PRE><P>A couple of smaller HTML macros and helper functions automate other
+common patterns. The <CODE>:table-row</CODE> HTML macro makes it easier to
+generate the HTML for a single row of a table. It uses a feature of
+FOO that I'll discuss in Chapter 31, an <CODE>&amp;attributes</CODE> parameter,
+which causes uses of the macro to be parsed just like normal
+s-expression HTML forms, with any attributes gathered into a list
+that will be bound to the <CODE>&amp;attributes</CODE> parameter. It looks like
+this:</P><PRE>(define-html-macro :table-row (&amp;attributes attrs &amp;rest values)
+  `(:tr ,@attrs ,@(loop for v in values collect `(:td ,v))))</PRE><P>And the <CODE>link</CODE> function generates a URL back into the
+application to be used as the <CODE>HREF</CODE> attribute with an <CODE>A</CODE>
+element, building a query string out of a set of keyword/value pairs
+and making sure all special characters are properly escaped. For
+instance, instead of writing this:</P><PRE>(:a :href &quot;browse?what=artist&amp;genre=Rhythm+%26+Blues&quot; &quot;Artists&quot;)</PRE><P>you can write the following:</P><PRE>(:a :href (link &quot;browse&quot; :what &quot;artist&quot; :genre &quot;Rhythm &amp; Blues&quot;) &quot;Artists&quot;)</PRE><P>It looks like this:</P><PRE>(defun link (target &amp;rest attributes)
+  (html 
+    (:attribute
+     (:format &quot;~a~@[?~{~(~a~)=~a~^&amp;~}~]&quot; target (mapcar #'urlencode attributes)))))</PRE><P>To URL encode the keys and values, you use the helper function
+<CODE>urlencode</CODE>, which is a wrapper around the function
+<CODE>encode-form-urlencoded</CODE>, which is a nonpublic function from
+AllegroServe. This is--on one hand--bad form; since the name
+<CODE>encode-form-urlencoded</CODE> isn't exported from <CODE>NET.ASERVE</CODE>,
+it's possible that <CODE>encode-form-urlencoded</CODE> may go away or get
+renamed out from under you. On the other hand, using this unexported
+symbol for the time being lets you get work done for the moment; by
+wrapping <CODE>encode-form-urlencoded</CODE> in your own function, you
+isolate the crufty code to one function, which you could rewrite if
+you had to.</P><PRE>(defun urlencode (string)
+  (net.aserve::encode-form-urlencoded string))</PRE><P>Finally, you need the CSS style sheet <CODE>mp3-browser.css</CODE> used by
+<CODE>:mp3-browser-page</CODE>. Since there's nothing dynamic about it,
+it's probably easiest to just publish a static file with
+<CODE>publish-file</CODE>.</P><PRE>(publish-file :path &quot;/mp3-browser.css&quot;  :file <I>filename</I> :content-type &quot;text/css&quot;)</PRE><P>A sample style sheet is included with the source code for this
+chapter on the book's Web site. You'll define a function, at the end
+of this chapter, that starts the MP3 browser application. It'll take
+care of, among other things, publishing this file.</P><A NAME="the-browse-page"><H2>The Browse Page</H2></A><P>The first URL function will generate a page for browsing the MP3
+database. Its query parameters will tell it what kind of thing the
+user is browsing and provide the criteria of what elements of the
+database they're interested in. It'll give them a way to select
+database entries that match a specific genre, artist, or album. In
+the interest of serendipity, you can also provide a way to select a
+random subset of matching items. When the user is browsing at the
+level of individual songs, the title of the song will be a link that
+causes that song to be added to the playlist. Otherwise, each item
+will be presented with links that let the user browse the listed item
+by some other category. For example, if the user is browsing genres,
+the entry &quot;Blues&quot; will contain links to browse all albums, artists,
+and songs in the genre Blues. Additionally, the browse page will
+feature an &quot;Add all&quot; button that adds every song matching the page's
+criteria to the user's playlist. The function looks like this:</P><PRE>(define-url-function browse
+    (request (what keyword :genre) genre artist album (random integer))
+
+  (let* ((values (values-for-page what genre artist album random))
+         (title (browse-page-title what random genre artist album))
+         (single-column (if (eql what :song) :file what))
+         (values-string (values-&gt;base-64 single-column values)))
+    (html
+     (:mp3-browser-page
+      (:title title)
+      ((:form :method &quot;POST&quot; :action &quot;playlist&quot;)
+       (:input :name &quot;values&quot; :type &quot;hidden&quot; :value values-string)
+       (:input :name &quot;what&quot; :type &quot;hidden&quot; :value single-column)
+       (:input :name &quot;action&quot; :type &quot;hidden&quot; :value :add-songs)
+       (:input :name &quot;submit&quot; :type &quot;submit&quot; :value &quot;Add all&quot;))
+      (:ul (do-rows (row values) (list-item-for-page what row)))))))</PRE><P>This function starts by using the function <CODE>values-for-page</CODE> to
+get a table containing the values it needs to present. When the user
+is browsing by song--when the <CODE>what</CODE> parameter is
+<CODE>:song</CODE>--you want to select complete rows from the database. But
+when they're browsing by genre, artist, or album, you want to select
+only the distinct values for the given category. The database
+function <CODE>select</CODE> does most of the heavy lifting, with
+<CODE>values-for-page</CODE> mostly responsible for passing the right
+arguments depending on the value of <CODE>what</CODE>. This is also where
+you select a random subset of the matching rows if necessary.</P><PRE>(defun values-for-page (what genre artist album random)
+  (let ((values
+         (select 
+          :from *mp3s*
+          :columns (if (eql what :song) t what)
+          :where (matching *mp3s* :genre genre :artist artist :album album)
+          :distinct (not (eql what :song))
+          :order-by (if (eql what :song) '(:album :track) what))))
+    (if random (random-selection values random) values)))</PRE><P>To generate the title for the browse page, you pass the browsing
+criteria to the following function, <CODE>browse-page-title</CODE>:</P><PRE>(defun browse-page-title (what random genre artist album)
+  (with-output-to-string (s)
+    (when random (format s &quot;~:(~r~) Random &quot; random))
+    (format s &quot;~:(~a~p~)&quot; what random)
+    (when (or genre artist album)
+      (when (not (eql what :song)) (princ &quot; with songs&quot; s))
+      (when genre  (format s &quot; in genre ~a&quot; genre))
+      (when artist (format s &quot; by artist ~a &quot; artist))
+      (when album  (format s &quot; on album ~a&quot; album)))))</PRE><P>Once you have the values you want to present, you need to do two
+things with them. The main task, of course, is to present them, which
+happens in the <CODE>do-rows</CODE> loop, leaving the rendering of each row
+to the function <CODE>list-item-for-page</CODE>. That function renders
+<CODE>:song</CODE> rows one way and all other kinds another way.</P><PRE>(defun list-item-for-page (what row)
+  (if (eql what :song)
+    (with-column-values (song file album artist genre) row
+      (html
+        (:li
+         (:a :href (link &quot;playlist&quot; :file file :action &quot;add-songs&quot;) (:b song)) &quot; from &quot;
+         (:a :href (link &quot;browse&quot;  :what :song :album  album) album) &quot; by &quot;
+         (:a :href (link &quot;browse&quot; :what :song :artist artist) artist) &quot; in genre &quot;
+         (:a :href (link &quot;browse&quot;  :what :song :genre  genre) genre))))
+    (let ((value (column-value row what)))
+      (html
+       (:li value &quot; - &quot;
+            (browse-link :genre  what value)
+            (browse-link :artist what value)
+            (browse-link :album  what value)
+            (browse-link :song   what value))))))
+
+(defun browse-link (new-what what value)
+  (unless (eql new-what what)
+    (html
+     &quot;[&quot; 
+     (:a :href (link &quot;browse&quot; :what new-what what value) (:format &quot;~(~as~)&quot; new-what))
+     &quot;] &quot;)))</PRE><P>The other thing on the <CODE>browse</CODE> page is a form with several
+hidden <CODE>INPUT</CODE> fields and an &quot;Add all&quot; submit button. You need
+to use an HTML form instead of a regular link to keep the application
+stateless--to make sure all the information needed to respond to a
+request comes in the request itself. Because the browse page results
+can be partially random, you need to submit a fair bit of data for
+the server to be able to reconstitute the list of songs to add to the
+playlist. If you didn't allow the browse page to return randomly
+generated results, you wouldn't need much data--you could just submit
+a request to add songs with whatever search criteria the browse page
+used. But if you added songs that way, with criteria that included a
+<CODE>random</CODE> argument, then you'd end up adding a different set of
+random songs than the user was looking at on the page when they hit
+the &quot;Add all&quot; button.</P><P>The solution you'll use is to send back a form that has enough
+information stashed away in a hidden <CODE>INPUT</CODE> element to allow the
+server to reconstitute the list of songs matching the browse page
+criteria. That information is the list of values returned by
+<CODE>values-for-page</CODE> and the value of the <CODE>what</CODE> parameter.
+This is where you use the <CODE>base64-list</CODE> parameter type; the
+function <CODE>values-&gt;base64</CODE> extracts the values of a specified
+column from the table returned by <CODE>values-for-page</CODE> into a list
+and then makes a base 64-encoded string out of that list to embed in
+the form.</P><PRE>(defun values-&gt;base-64 (column values-table)
+  (flet ((value (r) (column-value r column)))
+    (obj-&gt;base64 (map-rows #'value values-table))))</PRE><P>When that parameter comes back as the value of the <CODE>values</CODE>
+query parameter to a URL function that declares <CODE>values</CODE> to be
+of type <CODE>base-64-list</CODE>, it'll be automatically converted back to
+a list. As you'll see in a moment, that list can then be used to
+construct a query that'll return the correct list of songs.<SUP>5</SUP> When you're
+browsing by <CODE>:song</CODE>, you use the values from the <CODE>:file</CODE>
+column since they uniquely identify the actual songs while the song
+names may not.</P><A NAME="the-playlist"><H2>The Playlist</H2></A><P>This brings me to the next URL function, <CODE>playlist</CODE>. This is the
+most complex page of the three--it's responsible for displaying the
+current contents of the user's playlist as well as for providing the
+interface to manipulate the playlist. But with most of the tedious
+bookkeeping handled by <CODE>define-url-function</CODE>, it's not too hard
+to see how <CODE>playlist</CODE> works. Here's the beginning of the
+definition, with just the parameter list:</P><PRE>(define-url-function playlist 
+    (request
+     (playlist-id string (playlist-id request) :package)
+     (action keyword)      ; Playlist manipulation action
+     (what keyword :file)  ; for :add-songs action
+     (values base-64-list) ;             &quot;
+     file                  ; for :add-songs and :delete-songs actions
+     genre                 ; for :delete-songs action
+     artist                ;             &quot;
+     album                 ;             &quot;
+     (order-by keyword)    ; for :sort action
+     (shuffle keyword)     ; for :shuffle action
+     (repeat keyword))     ; for :set-repeat action</PRE><P>In addition to the obligatory <CODE>request</CODE> parameter,
+<CODE>playlist</CODE> takes a number of query parameters. The most important
+in some ways is <CODE>playlist-id</CODE>, which identifies which
+<CODE>playlist</CODE> object the page should display and manipulate. For
+this parameter, you can take advantage of
+<CODE>define-url-function</CODE>'s &quot;sticky parameter&quot; feature. Normally,
+the <CODE>playlist-id</CODE> won't be supplied explicitly, defaulting to
+the value returned by the <CODE>playlist-id</CODE> function, namely, the IP
+address of the client machine on which the browser is running.
+However, users can also manipulate their playlists from different
+machines than the ones running their MP3 clients by allowing this
+value to be explicitly specified. And if it's specified once,
+<CODE>define-url-function</CODE> will arrange for it to &quot;stick&quot; by setting
+a cookie in the browser. Later you'll define a URL function that
+generates a list of all existing playlists, which users can use to
+pick a playlist other than the one for the machines they're browsing
+from.</P><P>The <CODE>action</CODE> parameter specifies some action to take on the
+user's playlist object. The value of this parameter, which will be
+converted to a keyword symbol for you, can be <CODE>:add-songs</CODE>,
+<CODE>:delete-songs</CODE>, <CODE>:clear</CODE>, <CODE>:sort</CODE>, <CODE>:shuffle</CODE>,
+or <CODE>:set-repeat</CODE>. The <CODE>:add-songs</CODE> action is used by the
+&quot;Add all&quot; button in the browse page and also by the links used to add
+individual songs. The other actions are used by the links on the
+playlist page itself.</P><P>The <CODE>file</CODE>, <CODE>what</CODE>, and <CODE>values</CODE> parameters are used
+with the <CODE>:add-songs</CODE> action. By declaring <CODE>values</CODE> to be
+of type <CODE>base-64-list</CODE>, the <CODE>define-url-function</CODE>
+infrastructure will take care of decoding the value submitted by the
+&quot;Add all&quot; form. The other parameters are used with other actions as
+noted in the comments.</P><P>Now let's look at the body of <CODE>playlist</CODE>. The first thing you
+need to do is use the <CODE>playlist-id</CODE> to look up the queue object
+and then acquire the playlist's lock with the following two lines:</P><PRE>(let ((playlist (lookup-playlist playlist-id)))
+  (with-playlist-locked (playlist)</PRE><P>Since <CODE>lookup-playlist</CODE> will create a new playlist if necessary,
+this will always return a <CODE>playlist</CODE> object. Then you take care
+of any necessary queue manipulation, dispatching on the value of the
+<CODE>action</CODE> parameter in order to call one of the <CODE>playlist</CODE>
+functions.</P><PRE>(case action
+  (:add-songs      (add-songs playlist what (or values (list file))))
+  (:delete-songs   (delete-songs 
+                    playlist 
+                    :file file :genre genre
+                    :artist artist :album album))
+  (:clear          (clear-playlist playlist))
+  (:sort           (sort-playlist playlist order-by))
+  (:shuffle        (shuffle-playlist playlist shuffle))
+  (:set-repeat     (setf (repeat playlist) repeat)))</PRE><P>All that's left of the <CODE>playlist</CODE> function is the actual HTML
+generation. Again, you can use the <CODE>:mp3-browser-page</CODE> HTML
+macro to make sure the basic form of the page matches the other pages
+in the application, though this time you pass <CODE><B>NIL</B></CODE> to the
+<CODE>:header</CODE> argument in order to leave out the <CODE>H1</CODE> header.
+Here's the rest of the function:</P><PRE>(html
+ (:mp3-browser-page
+  (:title (:format &quot;Playlist - ~a&quot; (id playlist)) :header nil)
+  (playlist-toolbar playlist)
+  (if (empty-p playlist)
+    (html (:p (:i &quot;Empty.&quot;)))
+    (html 
+      ((:table :class &quot;playlist&quot;)
+       (:table-row &quot;#&quot; &quot;Song&quot; &quot;Album&quot; &quot;Artist&quot; &quot;Genre&quot;)
+       (let ((idx 0)
+             (current-idx (current-idx playlist)))
+         (do-rows (row (songs-table playlist))
+           (with-column-values (track file song album artist genre) row
+             (let ((row-style (if (= idx current-idx) &quot;now-playing&quot; &quot;normal&quot;)))
+               (html
+                 ((:table-row :class row-style)
+                  track
+                  (:progn song   (delete-songs-link :file file))
+                  (:progn album  (delete-songs-link :album album))
+                  (:progn artist (delete-songs-link :artist artist))
+                  (:progn genre  (delete-songs-link :genre genre)))))
+             (incf idx))))))))))))</PRE><P>The function <CODE>playlist-toolbar</CODE> generates a toolbar containing
+links to <CODE>playlist</CODE> to perform the various <CODE>:action</CODE>
+manipulations. And <CODE>delete-songs-link</CODE> generates a link to
+<CODE>playlist</CODE> with the <CODE>:action</CODE> parameter set to
+<CODE>:delete-songs</CODE> and the appropriate arguments to delete an
+individual file, or all files on an album, by a particular artist or
+in a specific genre.</P><PRE>(defun playlist-toolbar (playlist)
+  (let ((current-repeat (repeat playlist))
+        (current-sort (ordering playlist))
+        (current-shuffle (shuffle playlist)))
+    (html
+     (:p :class &quot;playlist-toolbar&quot;
+         (:i &quot;Sort by:&quot;)
+         &quot; [ &quot;
+         (sort-playlist-button &quot;genre&quot; current-sort) &quot; | &quot; 
+         (sort-playlist-button &quot;artist&quot; current-sort) &quot; | &quot; 
+         (sort-playlist-button &quot;album&quot; current-sort) &quot; | &quot; 
+         (sort-playlist-button &quot;song&quot; current-sort) &quot; ] &quot;
+         (:i &quot;Shuffle by:&quot;)
+         &quot; [ &quot;
+         (playlist-shuffle-button &quot;none&quot; current-shuffle) &quot; | &quot;
+         (playlist-shuffle-button &quot;song&quot; current-shuffle) &quot; | &quot;
+         (playlist-shuffle-button &quot;album&quot; current-shuffle) &quot; ] &quot;
+         (:i &quot;Repeat:&quot;)
+         &quot; [ &quot;
+         (playlist-repeat-button &quot;none&quot; current-repeat) &quot; | &quot;
+         (playlist-repeat-button &quot;song&quot; current-repeat) &quot; | &quot;
+         (playlist-repeat-button &quot;all&quot; current-repeat) &quot; ] &quot;
+         &quot;[ &quot; (:a :href (link &quot;playlist&quot; :action &quot;clear&quot;) &quot;Clear&quot;) &quot; ] &quot;))))
+
+(defun playlist-button (action argument new-value current-value)
+  (let ((label (string-capitalize new-value)))
+    (if (string-equal new-value current-value)
+      (html (:b label))
+      (html (:a :href (link &quot;playlist&quot; :action action argument new-value) label)))))
+
+(defun sort-playlist-button (order-by current-sort)
+  (playlist-button :sort :order-by order-by current-sort))
+
+(defun playlist-shuffle-button (shuffle current-shuffle)
+  (playlist-button :shuffle :shuffle shuffle current-shuffle))
+
+(defun playlist-repeat-button (repeat current-repeat)
+  (playlist-button :set-repeat :repeat repeat current-repeat))
+
+(defun delete-songs-link (what value)
+  (html &quot; [&quot; (:a :href (link &quot;playlist&quot; :action :delete-songs what value) &quot;x&quot;) &quot;]&quot;))</PRE><A NAME="finding-a-playlist"><H2>Finding a Playlist</H2></A><P>The last of the three URL functions is the simplest. It presents a
+table listing all the playlists that have been created. Ordinarily
+users won't need to use this page, but during development it gives
+you a useful view into the state of the system. It also provides the
+mechanism to choose a different playlist--each playlist ID is a link
+to the <CODE>playlist</CODE> page with an explicit <CODE>playlist-id</CODE> query
+parameter, which will then be made sticky by the <CODE>playlist</CODE> URL
+function. Note that you need to acquire the <CODE>*playlists-lock*</CODE>
+to make sure the <CODE>*playlists*</CODE> hash table doesn't change out
+from under you while you're iterating over it.</P><PRE>(define-url-function all-playlists (request)
+  (:mp3-browser-page
+   (:title &quot;All Playlists&quot;)
+   ((:table :class &quot;all-playlists&quot;)
+    (:table-row &quot;Playlist&quot; &quot;# Songs&quot; &quot;Most recent user agent&quot;)
+    (with-process-lock (*playlists-lock*)
+      (loop for playlist being the hash-values of *playlists* do
+           (html
+             (:table-row
+              (:a :href (link &quot;playlist&quot; :playlist-id (id playlist)) (:print (id playlist)))
+              (:print (table-size (songs-table playlist)))
+              (:print (user-agent playlist)))))))))</PRE><A NAME="running-the-app"><H2>Running the App</H2></A><P>And that's it. To use this app, you just need to load the MP3
+database with the <CODE>load-database</CODE> function from Chapter 27,
+publish the CSS style sheet, set <CODE>*song-source-type*</CODE> to
+<CODE>playlist</CODE> so <CODE>find-song-source</CODE> uses playlists instead of
+the singleton song source defined in the previous chapter, and start
+AllegroServe. The following function takes care of all these steps
+for you, after you fill in appropriate values for the two parameters
+<CODE>*mp3-dir*</CODE>, which is the root directory of your MP3 collection,
+and <CODE>*mp3-css*</CODE>, the filename of the CSS style sheet:</P><PRE>(defparameter *mp3-dir* ...)
+
+(defparameter *mp3-css* ...)
+
+(defun start-mp3-browser ()
+  (load-database *mp3-dir* *mp3s*)
+  (publish-file :path &quot;/mp3-browser.css&quot;  :file *mp3-css* :content-type &quot;text/css&quot;)
+  (setf *song-source-type* 'playlist)
+  (net.aserve::debug-on :notrap)
+  (net.aserve:start :port 2001))</PRE><P>When you invoke this function, it will print dots while it loads the
+ID3 information from your ID3 files. Then you can point your MP3
+client at this URL:</P><PRE>http://localhost:2001/stream.mp3</PRE><P>and point your browser at some good starting place, such as this:</P><PRE>http://localhost:2001/browse</PRE><P>which will let you start browsing by the default category, Genre.
+After you've added some songs to the playlist, you can press Play on
+the MP3 client, and it should start playing the first song.</P><P>Obviously, you could improve the user interface in any of a number of
+ways--for instance, if you have a lot of MP3s in your library, it
+might be useful to be able to browse artists or albums by the first
+letter of their names. Or maybe you could add a &quot;Play whole album&quot;
+button to the playlist page that causes the playlist to immediately
+put all the songs from the same album as the currently playing song
+at the top of the playlist. Or you could change the <CODE>playlist</CODE>
+class, so instead of playing silence when there are no songs queued
+up, it picks a random song from the database. But all those ideas
+fall in the realm of application design, which isn't really the topic
+of this book. Instead, the next two chapters will drop back to the
+level of software infrastructure to cover how the FOO HTML generation
+library works.
+</P><HR/><DIV CLASS="notes"><P><SUP>1</SUP>The intricacies of concurrent
+programming are beyond the scope of this book. The basic idea is that
+if you have multiple threads of control--as you will in this
+application with some threads running the <CODE>shoutcast</CODE> function
+and other threads responding to requests from the browser--then you
+need to make sure only one thread at a time manipulates an object in
+order to prevent one thread from seeing the object in an inconsistent
+state while another thread is working on it. In this function, for
+instance, if two new MP3 clients are connecting at the same time,
+they'd both try to add an entry to <CODE>*playlists*</CODE> and might
+interfere with each other. The <CODE>with-process-lock</CODE> ensures that
+each thread gets exclusive access to the hash table for long enough
+to do the work it needs to do.</P><P><SUP>2</SUP>This
+approach also assumes that every client machine has a unique IP
+address. This assumption should hold as long as all the users are on
+the same LAN but may not hold if clients are connecting from behind a
+firewall that does network address translation. Deploying this
+application outside a LAN will require some modifications, but if you
+want to deploy this application to the wider Internet, you'd better
+know enough about networking to figure out an appropriate scheme
+yourself.</P><P><SUP>3</SUP>Unfortunately, because of licensing issues around the
+MP3 format, it's not clear that it's legal for me to provide you with
+such an MP3 without paying licensing fees to Fraunhofer IIS. I got
+mine as part of the software that came with my Slimp3 from Slim
+Devices. You can grab it from their Subversion repository via the Web
+at <CODE>http://svn.slimdevices.com/*checkout*/trunk/server/
+HT</CODE><CODE><B>ML/EN/html/silentpacket.mp3?rev=2</B></CODE>. Or buy a Squeezebox, the
+new, wireless version of Slimp3, and you'll get
+<CODE>silentpacket.mp3</CODE> as part of the software that comes with it.
+Or find an MP3 of John Cage's piece <I>4'33&quot;</I>.</P><P><SUP>4</SUP>The reader supports a bit of syntax,
+<CODE>#.</CODE>, that causes the following s-expression to be evaluated at
+read time. This is occasionally useful in source code but obviously
+opens a big security hole when you read untrusted data. However, you
+can turn off this syntax by setting <CODE><B>*READ-EVAL*</B></CODE> to <CODE><B>NIL</B></CODE>,
+which will cause the reader to signal an error if it encounters
+<CODE>#.</CODE>.</P><P><SUP>5</SUP>This
+solution has its drawbacks--if a <CODE>browse</CODE> page returns a lot of
+results, a fair bit of data is going back and forth under the covers.
+Also, the database queries aren't necessarily the most efficient. But
+it does keep the application stateless. An alternative approach is to
+squirrel away, on the server side, information about the results
+returned by <CODE>browse</CODE> and then, when a request to add songs come
+in, find the appropriate bit of information in order to re-create the
+correct set of songs. For instance, you could just save the values
+list instead of sending it back in the form. Or you could copy the
+<CODE><B>RANDOM-STATE</B></CODE> object before you generate the browse results so
+you can later re-create the same &quot;random&quot; results. But this approach
+causes its own problems. For instance, you'd then need to worry about
+when you can get rid of the squirreled-away information; you never
+know when the user might hit the Back button on their browser to
+return to an old browse page and then hit the &quot;Add all&quot; button.
+Welcome to the wonderful world of Web programming.</P></DIV></BODY></HTML>

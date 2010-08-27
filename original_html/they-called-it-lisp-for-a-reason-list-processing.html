@@ -1,0 +1,453 @@
+<HTML><HEAD><TITLE>They Called It LISP for a Reason: List Processing</TITLE><LINK REL="stylesheet" TYPE="text/css" HREF="style.css"/></HEAD><BODY><DIV CLASS="copyright">Copyright &copy; 2003-2005, Peter Seibel</DIV><H1>12. They Called It LISP for a Reason: List Processing</H1><P>Lists play an important role in Lisp--for reasons both historical and
+practical. Historically, lists were Lisp's original composite data
+type, though it has been decades since they were its <I>only</I> such
+data type. These days, a Common Lisp programmer is as likely to use a
+vector, a hash table, or a user-defined class or structure as to use a
+list.</P><P>Practically speaking, lists remain in the language because they're an
+excellent solution to certain problems. One such problem--how to
+represent code as data in order to support code-transforming and
+code-generating macros--is particular to Lisp, which may explain why
+other languages don't feel the lack of Lisp-style lists. More
+generally, lists are an excellent data structure for representing any
+kind of heterogeneous and/or hierarchical data. They're also quite
+lightweight and support a functional style of programming that's
+another important part of Lisp's heritage.</P><P>Thus, you need to understand lists on their own terms; as you gain a
+better understanding of how lists work, you'll be in a better
+position to appreciate when you should and shouldn't use them. </P><A NAME="there-is-no-list"><H2>&quot;There Is No List&quot;</H2></A><BLOCKQUOTE><B>Spoon Boy</B>: Do not try and bend the list. That's impossible.
+Instead . . . only try to realize the truth.</BLOCKQUOTE><BLOCKQUOTE><B>Neo</B>: What truth?</BLOCKQUOTE><BLOCKQUOTE><B>Spoon Boy</B>: There is no list.</BLOCKQUOTE><BLOCKQUOTE><B>Neo</B>: There is no list?</BLOCKQUOTE><BLOCKQUOTE><B>Spoon Boy</B>: Then you'll see that it is not the list that bends;
+it is only yourself.<SUP>1</SUP></BLOCKQUOTE><P>The key to understanding lists is to understand that they're largely
+an illusion built on top of objects that are instances of a more
+primitive data type. Those simpler objects are pairs of values called
+<I>cons cells</I>, after the function <CODE><B>CONS</B></CODE> used to create them.</P><P><CODE><B>CONS</B></CODE> takes two arguments and returns a new cons cell containing
+the two values.<SUP>2</SUP> These values can be references to any kind of object.
+Unless the second value is <CODE><B>NIL</B></CODE> or another cons cell, a cons is
+printed as the two values in parentheses separated by a dot, a
+so-called dotted pair.</P><PRE>(cons 1 2) ==&gt; (1 . 2)</PRE><P>The two values in a cons cell are called the <CODE><B>CAR</B></CODE> and the
+<CODE><B>CDR</B></CODE> after the names of the functions used to access them. At the
+dawn of time, these names were mnemonic, at least to the folks
+implementing the first Lisp on an IBM 704. But even then they were
+just lifted from the assembly mnemonics used to implement the
+operations. However, it's not all bad that these names are somewhat
+meaningless--when considering individual cons cells, it's best to
+think of them simply as an arbitrary pair of values without any
+particular semantics. Thus:</P><PRE>(car (cons 1 2)) ==&gt; 1
+(cdr (cons 1 2)) ==&gt; 2</PRE><P>Both <CODE><B>CAR</B></CODE> and <CODE><B>CDR</B></CODE> are also <CODE><B>SETF</B></CODE>able places--given an
+existing cons cell, it's possible to assign a new value to either of
+its values.<SUP>3</SUP></P><PRE>(defparameter *cons* (cons 1 2))
+*cons*                 ==&gt; (1 . 2)
+(setf (car *cons*) 10) ==&gt; 10
+*cons*                 ==&gt; (10 . 2)
+(setf (cdr *cons*) 20) ==&gt; 20
+*cons*                 ==&gt; (10 . 20)</PRE><P>Because the values in a cons cell can be references to any kind of
+object, you can build larger structures out of cons cells by linking
+them together. Lists are built by linking together cons cells in a
+chain. The elements of the list are held in the <CODE><B>CAR</B></CODE>s of the cons
+cells while the links to subsequent cons cells are held in the
+<CODE><B>CDR</B></CODE>s. The last cell in the chain has a <CODE><B>CDR</B></CODE> of <CODE><B>NIL</B></CODE>,
+which--as I mentioned in Chapter 4--represents the empty list as
+well as the boolean value false. </P><P>This arrangement is by no means unique to Lisp; it's called a
+<I>singly linked list</I>. However, few languages outside the Lisp
+family provide such extensive support for this humble data type.</P><P>So when I say a particular value is a list, what I really mean is
+it's either <CODE><B>NIL</B></CODE> or a reference to a cons cell. The <CODE><B>CAR</B></CODE> of
+the cons cell is the first item of the list, and the <CODE><B>CDR</B></CODE> is a
+reference to another list, that is, another cons cell or <CODE><B>NIL</B></CODE>,
+containing the remaining elements. The Lisp printer understands this
+convention and prints such chains of cons cells as parenthesized
+lists rather than as dotted pairs. </P><PRE>(cons 1 nil)                   ==&gt; (1)
+(cons 1 (cons 2 nil))          ==&gt; (1 2)
+(cons 1 (cons 2 (cons 3 nil))) ==&gt; (1 2 3)</PRE><P>When talking about structures built out of cons cells, a few diagrams
+can be a big help. Box-and-arrow diagrams represent cons cells as a
+pair of boxes like this:</P><P><IMG CLASS="figure" SRC="figures/one-cons-cell.png"/></P><P>The box on the left represents the <CODE><B>CAR</B></CODE>, and the box on the right
+is the <CODE><B>CDR</B></CODE>. The values stored in a particular cons cell are
+either drawn in the appropriate box or represented by an arrow from
+the box to a representation of the referenced value.<SUP>4</SUP> For instance, the
+list <CODE>(1 2 3)</CODE>, which consists of three cons cells linked
+together by their <CODE><B>CDR</B></CODE>s, would be diagrammed like this:</P><P><IMG CLASS="figure" SRC="figures/list-1-2-3.png"/></P><P>However, most of the time you work with lists you won't have to deal
+with individual cons cells--the functions that create and manipulate
+lists take care of that for you. For example, the <CODE><B>LIST</B></CODE> function
+builds a cons cells under the covers for you and links them together;
+the following <CODE><B>LIST</B></CODE> expressions are equivalent to the previous
+<CODE><B>CONS</B></CODE> expressions:</P><PRE>(list 1)     ==&gt; (1)
+(list 1 2)   ==&gt; (1 2)
+(list 1 2 3) ==&gt; (1 2 3)</PRE><P>Similarly, when you're thinking in terms of lists, you don't have to
+use the meaningless names <CODE><B>CAR</B></CODE> and <CODE><B>CDR</B></CODE>; <CODE><B>FIRST</B></CODE> and
+<CODE><B>REST</B></CODE> are synonyms for <CODE><B>CAR</B></CODE> and <CODE><B>CDR</B></CODE> that you should use
+when you're dealing with cons cells as lists. </P><PRE>(defparameter *list* (list 1 2 3 4))
+(first *list*)        ==&gt; 1
+(rest *list*)         ==&gt; (2 3 4)
+(first (rest *list*)) ==&gt; 2</PRE><P>Because cons cells can hold any kind of values, so can lists. And a
+single list can hold objects of different types.</P><PRE>(list &quot;foo&quot; (list 1 2) 10) ==&gt; (&quot;foo&quot; (1 2) 10)</PRE><P>The structure of that list would look like this:</P><P><IMG CLASS="figure" SRC="figures/mixed-list.png"/></P><P>Because lists can have other lists as elements, you can also use them
+to represent trees of arbitrary depth and complexity. As such, they
+make excellent representations for any heterogeneous, hierarchical
+data. Lisp-based XML processors, for instance, usually represent XML
+documents internally as lists. Another obvious example of
+tree-structured data is Lisp code itself. In Chapters 30 and 31
+you'll write an HTML generation library that uses lists of lists to
+represent the HTML to be generated. I'll talk more next chapter about
+using cons cells to represent other data structures.</P><P>Common Lisp provides quite a large library of functions for
+manipulating lists. In the sections &quot;List-Manipulation Functions&quot; and
+&quot;Mapping,&quot; you'll look at some of the more important of these
+functions. However, they will be easier to understand in the context
+of a few ideas borrowed from functional programming. </P><A NAME="functional-programming-and-lists"><H2>Functional Programming and Lists</H2></A><P>The essence of functional programming is that programs are built
+entirely of functions with no side effects that compute their results
+based solely on the values of their arguments. The advantage of the
+functional style is that it makes programs easier to understand.
+Eliminating side effects eliminates almost all possibilities for
+action at a distance. And since the result of a function is
+determined only by the values of its arguments, its behavior is
+easier to understand and test. For instance, when you see an
+expression such as <CODE>(+ 3 4)</CODE>, you know the result is uniquely
+determined by the definition of the <CODE><B>+</B></CODE> function and the values
+<CODE>3</CODE> and <CODE>4</CODE>. You don't have to worry about what may have
+happened earlier in the execution of the program since there's
+nothing that can change the result of evaluating that expression.</P><P>Functions that deal with numbers are naturally functional since
+numbers are immutable. A list, on the other hand, can be mutated, as
+you've just seen, by <CODE><B>SETF</B></CODE>ing the <CODE><B>CAR</B></CODE>s and <CODE><B>CDR</B></CODE>s of the
+cons cells that make up its backbone. However, lists can be treated
+as a functional data type if you consider their value to be
+determined by the elements they contain. Thus, any list of the form
+<CODE>(1 2 3 4)</CODE> is functionally equivalent to any other list
+containing those four values, regardless of what cons cells are
+actually used to represent the list. And any function that takes a
+list as an argument and returns a value based solely on the contents
+of the list can likewise be considered functional. For instance, the
+<CODE><B>REVERSE</B></CODE> sequence function, given the list <CODE>(1 2 3 4)</CODE>,
+always returns a list <CODE>(4 3 2 1)</CODE>. Different calls to
+<CODE><B>REVERSE</B></CODE> with functionally equivalent lists as the argument will
+return functionally equivalent result lists. Another aspect of
+functional programming, which I'll discuss in the section &quot;Mapping,&quot;
+is the use of higher-order functions: functions that treat other
+functions as data, taking them as arguments or returning them as
+results. </P><P>Most of Common Lisp's list-manipulation functions are written in a
+functional style. I'll discuss later how to mix functional and other
+coding styles, but first you should understand a few subtleties of
+the functional style as applied to lists.</P><P>The reason most list functions are written functionally is it allows
+them to return results that share cons cells with their arguments. To
+take a concrete example, the function <CODE><B>APPEND</B></CODE> takes any number of
+list arguments and returns a new list containing the elements of all
+its arguments. For instance:</P><PRE>(append (list 1 2) (list 3 4)) ==&gt; (1 2 3 4)</PRE><P>From a functional point of view, <CODE><B>APPEND</B></CODE>'s job is to return the
+list <CODE>(1 2 3 4)</CODE> without modifying any of the cons cells in the
+lists <CODE>(1 2)</CODE> and <CODE>(3 4)</CODE>. One obvious way to achieve that
+goal is to create a completely new list consisting of four new cons
+cells. However, that's more work than is necessary. Instead,
+<CODE><B>APPEND</B></CODE> actually makes only two new cons cells to hold the values
+<CODE>1</CODE> and <CODE>2</CODE>, linking them together and pointing the
+<CODE><B>CDR</B></CODE> of the second cons cell at the head of the last argument,
+the list <CODE>(3 4)</CODE>. It then returns the cons cell containing the
+<CODE>1</CODE>. None of the original cons cells has been modified, and the
+result is indeed the list <CODE>(1 2 3 4)</CODE>. The only wrinkle is that
+the list returned by <CODE><B>APPEND</B></CODE> shares some cons cells with the list
+<CODE>(3 4)</CODE>. The resulting structure looks like this:</P><P><IMG CLASS="figure" SRC="figures/after-append.png"/></P><P>In general, <CODE><B>APPEND</B></CODE> must copy all but its last argument, but it
+can always return a result that <I>shares structure</I> with the last
+argument.</P><P>Other functions take similar advantage of lists' ability to share
+structure. Some, like <CODE><B>APPEND</B></CODE>, are specified to always return
+results that share structure in a particular way. Others are simply
+allowed to return shared structure at the discretion of the
+implementation. </P><A NAME="destructive-operations"><H2>&quot;Destructive&quot; Operations</H2></A><P>If Common Lisp were a purely functional language, that would be the
+end of the story. However, because it's possible to modify a cons
+cell after it has been created by <CODE><B>SETF</B></CODE>ing its <CODE><B>CAR</B></CODE> or
+<CODE><B>CDR</B></CODE>, you need to think a bit about how side effects and
+structure sharing mix.</P><P>Because of Lisp's functional heritage, operations that modify
+existing objects are called <I>destructive--</I>in functional
+programming, changing an object's state &quot;destroys&quot; it since it no
+longer represents the same value. However, using the same term to
+describe all state-modifying operations leads to a certain amount of
+confusion since there are two very different kinds of destructive
+operations, <I>for-side-effect</I> operations and <I>recycling</I>
+operations.<SUP>5</SUP></P><P>For-side-effect operations are those used specifically for their side
+effects. All uses of <CODE><B>SETF</B></CODE> are destructive in this sense, as are
+functions that use <CODE><B>SETF</B></CODE> under the covers to change the state of
+an existing object such as <CODE><B>VECTOR-PUSH</B></CODE> or <CODE><B>VECTOR-POP</B></CODE>. But
+it's a bit unfair to describe these operations as
+destructive--they're not intended to be used in code written in a
+functional style, so they shouldn't be described using functional
+terminology. However, if you mix nonfunctional, for-side-effect
+operations with functions that return structure-sharing results, then
+you need to be careful not to inadvertently modify the shared
+structure. For instance, consider these three definitions: </P><PRE>(defparameter *list-1* (list 1 2))
+(defparameter *list-2* (list 3 4))
+(defparameter *list-3* (append *list-1* *list-2*))</PRE><P>After evaluating these forms, you have three lists, but
+<CODE>*list-3*</CODE> and <CODE>*list-2*</CODE> share structure just like the
+lists in the previous diagram.</P><PRE>*list-1*                  ==&gt; (1 2)
+*list-2*                  ==&gt; (3 4)
+*list-3*                  ==&gt; (1 2 3 4)</PRE><P>Now consider what happens when you modify <CODE>*list-2*</CODE>.</P><PRE>(setf (first *list-2*) 0) ==&gt; 0
+*list-2*                  ==&gt; (0 4)     ; as expected
+*list-3*                  ==&gt; (1 2 0 4) ; maybe not what you wanted</PRE><P>The change to <CODE>*list-2*</CODE> also changes <CODE>*list-3*</CODE> because of
+the shared structure: the first cons cell in <CODE>*list-2*</CODE> is also
+the third cons cell in <CODE>*list-3*</CODE>. <CODE><B>SETF</B></CODE>ing the <CODE><B>FIRST</B></CODE>
+of <CODE>*list-2*</CODE> changes the value in the <CODE><B>CAR</B></CODE> of that cons
+cell, affecting both lists.</P><P>On the other hand, the other kind of destructive operations,
+recycling operations, <I>are</I> intended to be used in functional code.
+They use side effects only as an optimization. In particular, they
+reuse certain cons cells from their arguments when building their
+result. However, unlike functions such as <CODE><B>APPEND</B></CODE> that reuse cons
+cells by including them, unmodified, in the list they return,
+recycling functions reuse cons cells as raw material, modifying the
+<CODE><B>CAR</B></CODE> and <CODE><B>CDR</B></CODE> as necessary to build the desired result. Thus,
+recycling functions can be used safely only when the original lists
+aren't going to be needed after the call to the recycling function. </P><P>To see how a recycling function works, let's compare <CODE><B>REVERSE</B></CODE>,
+the nondestructive function that returns a reversed version of a
+sequence, to <CODE><B>NREVERSE</B></CODE>, a recycling version of the same function.
+Because <CODE><B>REVERSE</B></CODE> doesn't modify its argument, it must allocate a
+new cons cell for each element in the list being reversed. But
+suppose you write something like this:</P><PRE>(setf *list* (reverse *list*))</PRE><P>By assigning the result of <CODE><B>REVERSE</B></CODE> back to <CODE>*list*</CODE>, you've
+removed the reference to the original value of <CODE>*list*</CODE>.
+Assuming the cons cells in the original list aren't referenced
+anywhere else, they're now eligible to be garbage collected. However,
+in many Lisp implementations it'd be more efficient to immediately
+reuse the existing cons cells rather than allocating new ones and
+letting the old ones become garbage.</P><P><CODE><B>NREVERSE</B></CODE> allows you to do exactly that. The <I>N</I> stands for
+<I>non-consing</I>, meaning it doesn't need to allocate any new cons
+cells. The exact side effects of <CODE><B>NREVERSE</B></CODE> are intentionally not
+specified--it's allowed to modify any <CODE><B>CAR</B></CODE> or <CODE><B>CDR</B></CODE> of any
+cons cell in the list--but a typical implementation might walk down
+the list changing the <CODE><B>CDR</B></CODE> of each cons cell to point to the
+previous cons cell, eventually returning the cons cell that was
+previously the last cons cell in the old list and is now the head of
+the reversed list. No new cons cells need to be allocated, and no
+garbage is created.</P><P>Most recycling functions, like <CODE><B>NREVERSE</B></CODE>, have nondestructive
+counterparts that compute the same result. In general, the recycling
+functions have names that are the same as their non-destructive
+counterparts except with a leading <I>N</I>. However, not all do,
+including several of the more commonly used recycling functions such
+as <CODE><B>NCONC</B></CODE>, the recycling version of <CODE><B>APPEND</B></CODE>, and <CODE><B>DELETE</B></CODE>,
+<CODE><B>DELETE-IF</B></CODE>, <CODE><B>DELETE-IF-NOT</B></CODE>, and <CODE><B>DELETE-DUPLICATES</B></CODE>, the
+recycling versions of the <CODE><B>REMOVE</B></CODE> family of sequence functions.</P><P>In general, you use recycling functions in the same way you use their
+nondestructive counterparts except it's safe to use them only when
+you know the arguments aren't going to be used after the function
+returns. The side effects of most recycling functions aren't
+specified tightly enough to be relied upon. </P><P>However, the waters are further muddied by a handful of recycling
+functions with specified side effects that <I>can</I> be relied upon.
+They are <CODE><B>NCONC</B></CODE>, the recycling version of <CODE><B>APPEND</B></CODE>, and
+<CODE><B>NSUBSTITUTE</B></CODE> and its <CODE>-IF</CODE> and <CODE>-IF-NOT</CODE> variants, the
+recycling versions of the sequence functions <CODE><B>SUBSTITUTE</B></CODE> and
+friends.</P><P>Like <CODE><B>APPEND</B></CODE>, <CODE><B>NCONC</B></CODE> returns a concatenation of its list
+arguments, but it builds its result in the following way: for each
+nonempty list it's passed, <CODE><B>NCONC</B></CODE> sets the <CODE><B>CDR</B></CODE> of the list's
+last cons cell to point to the first cons cell of the next nonempty
+list. It then returns the first list, which is now the head of the
+spliced-together result. Thus:</P><PRE>(defparameter *x* (list 1 2 3))
+
+(nconc *x* (list 4 5 6)) ==&gt; (1 2 3 4 5 6)
+
+*x* ==&gt; (1 2 3 4 5 6)</PRE><P><CODE><B>NSUBSTITUTE</B></CODE> and variants can be relied on to walk down the list
+structure of the list argument and to <CODE><B>SETF</B></CODE> the <CODE><B>CAR</B></CODE>s of any
+cons cells holding the old value to the new value and to otherwise
+leave the list intact. It then returns the original list, which now
+has the same value as would've been computed by <CODE><B>SUBSTITUTE</B></CODE>.
+<SUP>6</SUP></P><P>The key thing to remember about <CODE><B>NCONC</B></CODE> and <CODE><B>NSUBSTITUTE</B></CODE> is
+that they're the exceptions to the rule that you can't rely on the
+side effects of recycling functions. It's perfectly acceptable--and
+arguably good style--to ignore the reliability of their side effects
+and use them, like any other recycling function, only for the value
+they return. </P><A NAME="combining-recycling-with-shared-structure"><H2>Combining Recycling with Shared Structure</H2></A><P>Although you can use recycling functions whenever the arguments to
+the recycling function won't be used after the function call, it's
+worth noting that each recycling function is a loaded gun pointed
+footward: if you accidentally use a recycling function on an argument
+that <I>is</I> used later, you're liable to lose some toes.</P><P>To make matters worse, shared structure and recycling functions tend
+to work at cross-purposes. Nondestructive list functions return
+lists that share structure under the assumption that cons cells are
+never modified, but recycling functions work by violating that
+assumption. Or, put another way, sharing structure is based on the
+premise that you don't care exactly what cons cells make up a list
+while using recycling functions requires that you know exactly what
+cons cells are referenced from where.</P><P>In practice, recycling functions tend to be used in a few idiomatic
+ways. By far the most common recycling idiom is to build up a list to
+be returned from a function by &quot;consing&quot; onto the front of a list,
+usually by <CODE><B>PUSH</B></CODE>ing elements onto a list stored in a local
+variable and then returning the result of <CODE><B>NREVERSE</B></CODE>ing
+it.<SUP>7</SUP></P><P>This is an efficient way to build a list because each <CODE><B>PUSH</B></CODE> has
+to create only one cons cell and modify a local variable and the
+<CODE><B>NREVERSE</B></CODE> just has to zip down the list reassigning the
+<CODE><B>CDR</B></CODE>s. Because the list is created entirely within the function,
+there's no danger any code outside the function has a reference to
+any of its cons cells. Here's a function that uses this idiom to
+build a list of the first <I>n</I> numbers, starting at zero:<SUP>8</SUP> </P><PRE>(defun upto (max)
+  (let ((result nil))
+    (dotimes (i max)
+      (push i result))
+    (nreverse result)))
+
+(upto 10) ==&gt; (0 1 2 3 4 5 6 7 8 9)</PRE><P>The next most common recycling idiom<SUP>9</SUP> is to
+immediately reassign the value returned by the recycling function
+back to the place containing the potentially recycled value. For
+instance, you'll often see expressions like the following, using
+<CODE><B>DELETE</B></CODE>, the recycling version of <CODE><B>REMOVE</B></CODE>:</P><PRE>(setf foo (delete nil foo))</PRE><P>This sets the value of <CODE>foo</CODE> to its old value except with all
+the <CODE><B>NIL</B></CODE>s removed. However, even this idiom must be used with
+some care--if <CODE>foo</CODE> shares structure with lists referenced
+elsewhere, using <CODE><B>DELETE</B></CODE> instead of <CODE><B>REMOVE</B></CODE> can destroy the
+structure of those other lists. For example, consider the two lists
+<CODE>*list-2*</CODE> and <CODE>*list-3*</CODE> from earlier that share their
+last two cons cells. </P><PRE>*list-2* ==&gt; (0 4)
+*list-3* ==&gt; (1 2 0 4)</PRE><P>You can delete <CODE>4</CODE> from <CODE>*list-3*</CODE> like this:</P><PRE>(setf *list-3* (delete 4 *list-3*)) ==&gt; (1 2 0)</PRE><P>However, <CODE><B>DELETE</B></CODE> will likely perform the necessary deletion by
+setting the <CODE><B>CDR</B></CODE> of the third cons cell to <CODE><B>NIL</B></CODE>,
+disconnecting the fourth cons cell, the one holding the <CODE>4</CODE>,
+from the list. Because the third cons cell of <CODE>*list-3*</CODE> is also
+the first cons cell in <CODE>*list-2*</CODE>, the following modifies
+<CODE>*list-2*</CODE> as well:</P><PRE>*list-2* ==&gt; (0)</PRE><P>If you had used <CODE><B>REMOVE</B></CODE> instead of <CODE><B>DELETE</B></CODE>, it would've built
+a list containing the values <CODE>1</CODE>, <CODE>2</CODE>, and <CODE>0</CODE>,
+creating new cons cells as necessary rather than modifying any of the
+cons cells in <CODE>*list-3*</CODE>. In that case, <CODE>*list-2*</CODE> wouldn't
+have been affected. </P><P>The <CODE><B>PUSH</B></CODE>/<CODE><B>NREVERSE</B></CODE> and <CODE><B>SETF</B></CODE>/<CODE><B>DELETE</B></CODE> idioms probably
+account for 80 percent of the uses of recycling functions. Other uses
+are possible but require keeping careful track of which functions
+return shared structure and which do not.</P><P>In general, when manipulating lists, it's best to write your own code
+in a functional style--your functions should depend only on the
+contents of their list arguments and shouldn't modify them. Following
+that rule will, of course, rule out using any destructive functions,
+recycling or otherwise. Once you have your code working, if profiling
+shows you need to optimize, you can replace nondestructive list
+operations with their recycling counterparts but only if you're
+certain the argument lists aren't referenced from anywhere else.</P><P>One last gotcha to watch out for is that the sorting functions
+<CODE><B>SORT</B></CODE>, <CODE><B>STABLE-SORT</B></CODE>, and <CODE><B>MERGE</B></CODE> mentioned in Chapter 11
+are also recycling functions when applied to lists.<SUP>10</SUP> However, these functions don't have nondestructive
+counterparts, so if you need to sort a list without destroying it,
+you need to pass the sorting function a copy made with
+<CODE><B>COPY-LIST</B></CODE>. In either case you need to be sure to save the result
+of the sorting function because the original argument is likely to be
+in tatters. For instance: </P><PRE>CL-USER&gt; (defparameter *list* (list 4 3 2 1))
+*LIST*
+CL-USER&gt; (sort *list* #'&lt;)
+(1 2 3 4)                      ; looks good
+CL-USER&gt; *list*
+(4)                            ; whoops!</PRE><A NAME="list-manipulation-functions"><H2>List-Manipulation Functions</H2></A><P>With that background out of the way, you're ready to look at the
+library of functions Common Lisp provides for manipulating lists.</P><P>You've already seen the basic functions for getting at the elements
+of a list: <CODE><B>FIRST</B></CODE> and <CODE><B>REST</B></CODE>. Although you can get at any
+element of a list by combining enough calls to <CODE><B>REST</B></CODE> (to move
+down the list) with a <CODE><B>FIRST</B></CODE> (to extract the element), that can
+be a bit tedious. So Common Lisp provides functions named for the
+other ordinals from <CODE><B>SECOND</B></CODE> to <CODE><B>TENTH</B></CODE> that return the
+appropriate element. More generally, the function <CODE><B>NTH</B></CODE> takes two
+arguments, an index and a list, and returns the <I>n</I>th (zero-based)
+element of the list. Similarly, <CODE><B>NTHCDR</B></CODE> takes an index and a list
+and returns the result of calling <CODE><B>CDR</B></CODE> <I>n</I> times. (Thus,
+<CODE>(nthcdr 0 ...)</CODE> simply returns the original list, and
+<CODE>(nthcdr 1 ...)</CODE> is equivalent to <CODE><B>REST</B></CODE>.) Note, however,
+that none of these functions is any more efficient, in terms of work
+done by the computer, than the equivalent combinations of <CODE><B>FIRST</B></CODE>s
+and <CODE><B>REST</B></CODE>s--there's no way to get to the <I>n</I>th element of a
+list without following <I>n</I> <CODE><B>CDR</B></CODE> references.<SUP>11</SUP></P><P>The 28 composite <CODE><B>CAR</B></CODE>/<CODE><B>CDR</B></CODE> functions are another family of
+functions you may see used from time to time. Each function is named
+by placing a sequence of up to four <CODE>A</CODE>s and <CODE>D</CODE>s between a
+<CODE>C</CODE> and <CODE>R</CODE>, with each <CODE>A</CODE> representing a call to
+<CODE><B>CAR</B></CODE> and each <CODE>D</CODE> a call to <CODE><B>CDR</B></CODE>. Thus: </P><PRE>(caar list) === (car (car list))
+(cadr list) === (car (cdr list))
+(cadadr list) === (car (cdr (car (cdr list))))</PRE><P>Note, however, that many of these functions make sense only when
+applied to lists that contain other lists. For instance, <CODE><B>CAAR</B></CODE>
+extracts the <CODE><B>CAR</B></CODE> of the <CODE><B>CAR</B></CODE> of the list it's given; thus,
+the list it's passed must contain another list as its first element.
+In other words, these are really functions on trees rather than
+lists:</P><PRE>(caar (list 1 2 3))                  ==&gt; <I>error</I>
+(caar (list (list 1 2) 3))           ==&gt; 1
+(cadr (list (list 1 2) (list 3 4)))  ==&gt; (3 4)
+(caadr (list (list 1 2) (list 3 4))) ==&gt; 3</PRE><P>These functions aren't used as often now as in the old days. And even
+the most die-hard old-school Lisp hackers tend to avoid the longer
+combinations. However, they're used quite a bit in older Lisp code,
+so it's worth at least understanding how they work.<SUP>12</SUP></P><P>The <CODE><B>FIRST</B></CODE>-<CODE><B>TENTH</B></CODE> and <CODE><B>CAR</B></CODE>, <CODE><B>CADR</B></CODE>, and so on,
+functions can also be used as <CODE><B>SETF</B></CODE>able places if you're using
+lists nonfunctionally.</P><P>Table 12-1 summarizes some other list functions that I won't cover in
+detail. </P><P><DIV CLASS="table-caption">Table 12-1. Other List Functions</DIV></P><TABLE CLASS="book-table"><TR><TD>Function</TD><TD>Description</TD></TR><TR><TD><CODE><B>LAST</B></CODE></TD><TD>Returns the last cons cell in a list. With an integer, argument
+returns the last <I>n</I> cons cells.</TD></TR><TR><TD><CODE><B>BUTLAST</B></CODE></TD><TD>Returns a copy of the list, excluding the last cons cell. With an
+integer argument, excludes the last <I>n</I> cells.</TD></TR><TR><TD><CODE><B>NBUTLAST</B></CODE></TD><TD>The recycling version of <CODE><B>BUTLAST</B></CODE>; may modify and return the
+argument list but has no reliable side effects.</TD></TR><TR><TD><CODE><B>LDIFF</B></CODE></TD><TD>Returns a copy of a list up to a given cons cell.</TD></TR><TR><TD><CODE><B>TAILP</B></CODE></TD><TD>Returns true if a given object is a cons cell that's part of the
+structure of a list.</TD></TR><TR><TD><CODE><B>LIST*</B></CODE></TD><TD>Builds a list to hold all but the last of its arguments and then
+makes the last argument the <CODE><B>CDR</B></CODE> of the last cell in the list. In
+other words, a cross between <CODE><B>LIST</B></CODE> and <CODE><B>APPEND</B></CODE>.</TD></TR><TR><TD><CODE><B>MAKE-LIST</B></CODE></TD><TD>Builds an <I>n</I> item list. The initial elements of the list are
+<CODE><B>NIL</B></CODE> or the value specified with the <CODE>:initial-element</CODE>
+keyword argument.</TD></TR><TR><TD><CODE><B>REVAPPEND</B></CODE></TD><TD>Combination of <CODE><B>REVERSE</B></CODE> and <CODE><B>APPEND</B></CODE>; reverses first
+argument as with <CODE><B>REVERSE</B></CODE> and then appends the second argument.</TD></TR><TR><TD><CODE><B>NRECONC</B></CODE></TD><TD>Recycling version of <CODE><B>REVAPPEND</B></CODE>; reverses first argument as if
+by <CODE><B>NREVERSE</B></CODE> and then appends the second argument. No reliable
+side effects.</TD></TR><TR><TD><CODE><B>CONSP</B></CODE></TD><TD>Predicate to test whether an object is a cons cell.</TD></TR><TR><TD><CODE><B>ATOM</B></CODE></TD><TD>Predicate to test whether an object is <I>not</I> a cons cell.</TD></TR><TR><TD><CODE><B>LISTP</B></CODE></TD><TD>Predicate to test whether an object is either a cons cell or
+<CODE><B>NIL</B></CODE>.</TD></TR><TR><TD><CODE><B>NULL</B></CODE></TD><TD>Predicate to test whether an object is <CODE><B>NIL</B></CODE>. Functionally
+equivalent to <CODE><B>NOT</B></CODE> but stylistically preferable when testing for
+an empty list as opposed to boolean false.</TD></TR></TABLE><A NAME="mapping"><H2>Mapping</H2></A><P>Another important aspect of the functional style is the use of
+higher-order functions, functions that take other functions as
+arguments or return functions as values. You saw several examples of
+higher-order functions, such as <CODE><B>MAP</B></CODE>, in the previous chapter.
+Although <CODE><B>MAP</B></CODE> can be used with both lists and vectors (that is,
+with any kind of sequence), Common Lisp also provides six mapping
+functions specifically for lists. The differences between the six
+functions have to do with how they build up their result and whether
+they apply the function to the elements of the list or to the cons
+cells of the list structure.</P><P><CODE><B>MAPCAR</B></CODE> is the function most like <CODE><B>MAP</B></CODE>. Because it always
+returns a list, it doesn't require the result-type argument <CODE><B>MAP</B></CODE>
+does. Instead, its first argument is the function to apply, and
+subsequent arguments are the lists whose elements will provide the
+arguments to the function. Otherwise, it behaves like <CODE><B>MAP</B></CODE>: the
+function is applied to successive elements of the list arguments,
+taking one element from each list per application of the function.
+The results of each function call are collected into a new list. For
+example:</P><PRE>(mapcar #'(lambda (x) (* 2 x)) (list 1 2 3)) ==&gt; (2 4 6)
+(mapcar #'+ (list 1 2 3) (list 10 20 30)) ==&gt; (11 22 33)</PRE><P><CODE><B>MAPLIST</B></CODE> is just like <CODE><B>MAPCAR</B></CODE> except instead of passing the
+elements of the list to the function, it passes the actual cons
+cells.<SUP>13</SUP> Thus, the function has access not only to the value of
+each element of the list (via the <CODE><B>CAR</B></CODE> of the cons cell) but also
+to the rest of the list (via the <CODE><B>CDR</B></CODE>).</P><P><CODE><B>MAPCAN</B></CODE> and <CODE><B>MAPCON</B></CODE> work like <CODE><B>MAPCAR</B></CODE> and <CODE><B>MAPLIST</B></CODE>
+except for the way they build up their result. While <CODE><B>MAPCAR</B></CODE> and
+<CODE><B>MAPLIST</B></CODE> build a completely new list to hold the results of the
+function calls, <CODE><B>MAPCAN</B></CODE> and <CODE><B>MAPCON</B></CODE> build their result by
+splicing together the results--which must be lists--as if by
+<CODE><B>NCONC</B></CODE>. Thus, each function invocation can provide any number of
+elements to be included in the result.<SUP>14</SUP> <CODE><B>MAPCAN</B></CODE>, like <CODE><B>MAPCAR</B></CODE>, passes the elements of the list to
+the mapped function while <CODE><B>MAPCON</B></CODE>, like <CODE><B>MAPLIST</B></CODE>, passes the
+cons cells.</P><P>Finally, the functions <CODE><B>MAPC</B></CODE> and <CODE><B>MAPL</B></CODE> are control constructs
+disguised as functions--they simply return their first list argument,
+so they're useful only when the side effects of the mapped function
+do something interesting. <CODE><B>MAPC</B></CODE> is the cousin of <CODE><B>MAPCAR</B></CODE> and
+<CODE><B>MAPCAN</B></CODE> while <CODE><B>MAPL</B></CODE> is in the <CODE><B>MAPLIST</B></CODE>/<CODE><B>MAPCON</B></CODE>
+family. </P><A NAME="other-structures"><H2>Other Structures</H2></A><P>While cons cells and lists are typically considered to be synonymous,
+that's not quite right--as I mentioned earlier, you can use lists of
+lists to represent trees. Just as the functions discussed in this
+chapter allow you to treat structures built out of cons cells as
+lists, other functions allow you to use cons cells to represent
+trees, sets, and two kinds of key/value maps. I'll discuss some of
+those functions in the next chapter.
+</P><HR/><DIV CLASS="notes"><P><SUP>1</SUP>Adapted from <I>The Matrix</I>
+  (<CODE>http://us.imdb.com/Quotes?0133093</CODE>)</P><P><SUP>2</SUP><CODE><B>CONS</B></CODE> was originally short for the verb
+<I>construct</I>.</P><P><SUP>3</SUP>When the place given to <CODE><B>SETF</B></CODE> is a <CODE><B>CAR</B></CODE> or
+<CODE><B>CDR</B></CODE>, it expands into a call to the function <CODE><B>RPLACA</B></CODE> or
+<CODE><B>RPLACD</B></CODE>; some old-school Lispers--the same ones who still use
+<CODE><B>SETQ</B></CODE>--will still use <CODE><B>RPLACA</B></CODE> and <CODE><B>RPLACD</B></CODE> directly, but
+modern style is to use <CODE><B>SETF</B></CODE> of <CODE><B>CAR</B></CODE> or <CODE><B>CDR</B></CODE>.</P><P><SUP>4</SUP>Typically,
+simple objects such as numbers are drawn within the appropriate box,
+and more complex objects will be drawn outside the box with an arrow
+from the box indicating the reference. This actually corresponds well
+with how many Common Lisp implementations work--although all objects
+are conceptually stored by reference, certain simple immutable
+objects can be stored directly in a cons cell.</P><P><SUP>5</SUP>The phrase <I>for-side-effect</I> is used in the
+language standard, but <I>recycling</I> is my own invention; most Lisp
+literature simply uses the term <I>destructive</I> for both kinds of
+operations, leading to the confusion I'm trying to dispel.</P><P><SUP>6</SUP>The string functions <CODE><B>NSTRING-CAPITALIZE</B></CODE>,
+<CODE><B>NSTRING-DOWNCASE</B></CODE>, and <CODE><B>NSTRING-UPCASE</B></CODE> are similar--they
+return the same results as their N-less counterparts but are
+specified to modify their string argument in place.</P><P><SUP>7</SUP>For example, in an examination of all uses of recycling
+functions in the Common Lisp Open Code Collection (CLOCC), a diverse
+set of libraries written by various authors, instances of the
+<CODE><B>PUSH</B></CODE>/<CODE><B>NREVERSE</B></CODE> idiom accounted for nearly half of all uses
+of recycling functions.</P><P><SUP>8</SUP>There
+are, of course, other ways to do this same thing. The extended
+<CODE><B>LOOP</B></CODE> macro, for instance, makes it particularly easy and likely
+generates code that's even more efficient than the <CODE><B>PUSH</B></CODE>/
+<CODE><B>NREVERSE</B></CODE> version.</P><P><SUP>9</SUP>This idiom accounts for 30
+percent of uses of recycling in the CLOCC code base.</P><P><SUP>10</SUP><CODE><B>SORT</B></CODE>
+and <CODE><B>STABLE-SORT</B></CODE> can be used as for-side-effect operations on
+vectors, but since they still return the sorted vector, you should
+ignore that fact and use them for return values for the sake of
+consistency.</P><P><SUP>11</SUP><CODE><B>NTH</B></CODE> is
+roughly equivalent to the sequence function <CODE><B>ELT</B></CODE> but works only
+with lists. Also, confusingly, <CODE><B>NTH</B></CODE> takes the index as the first
+argument, the opposite of <CODE><B>ELT</B></CODE>. Another difference is that
+<CODE><B>ELT</B></CODE> will signal an error if you try to access an element at an
+index greater than or equal to the length of the list, but <CODE><B>NTH</B></CODE>
+will return <CODE><B>NIL</B></CODE>.</P><P><SUP>12</SUP>In
+particular, they used to be used to extract the various parts of
+expressions passed to macros before the invention of destructuring
+parameter lists. For example, you could take apart the following
+expression:</P><PRE>(when (&gt; x 10) (print x))</PRE><P>Like this:</P><PRE>;; the condition
+(cadr '(when (&gt; x 10) (print x))) ==&gt; (&gt; X 10)</PRE><PRE>;; the body, as a list
+(cddr '(when (&gt; x 10) (print x))) ==&gt; ((PRINT X))</PRE><P><SUP>13</SUP>Thus, <CODE><B>MAPLIST</B></CODE> is the more primitive of the two
+functions--if you had only <CODE><B>MAPLIST</B></CODE>, you could build <CODE><B>MAPCAR</B></CODE>
+on top of it, but you couldn't build <CODE><B>MAPLIST</B></CODE> on top of
+<CODE><B>MAPCAR</B></CODE>.</P><P><SUP>14</SUP>In Lisp dialects that
+didn't have filtering functions like <CODE><B>REMOVE</B></CODE>, the idiomatic way
+to filter a list was with <CODE><B>MAPCAN</B></CODE>.</P><PRE>(mapcan #'(lambda (x) (if (= x 10) nil (list x)))  list) === (remove 10 list)</PRE></DIV></BODY></HTML>

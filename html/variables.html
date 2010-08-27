@@ -1,0 +1,641 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.01//EN">
+<html>
+    <head>
+        <title>
+            Variables
+        </title>
+        <link rel="stylesheet" type="text/css" href="style.css">
+    </head>
+    <body>
+        <h1>
+            6. Variables
+        </h1>
+        <p>
+            The next basic building block we need to look at are variables. Common Lisp supports two kinds of variables: lexical and dynamic.<sup>1</sup> These two types correspond roughly to "local" and "global" variables in other languages. However, the correspondence is only approximate. On one hand, some languages' "local" variables are in fact much like Common Lisp's dynamic variables.<sup>2</sup> And on the other, some languages' local variables are <i>lexically scoped</i> without providing all the capabilities provided by Common Lisp's lexical variables. In particular, not all languages that provide lexically scoped variables support closures.
+        </p>
+        <p>
+            To make matters a bit more confusing, many of the forms that deal with variables can be used with both lexical and dynamic variables. So I'll start by discussing a few aspects of Lisp's variables that apply to both kinds and then cover the specific characteristics of lexical and dynamic variables. Then I'll discuss Common Lisp's general-purpose assignment operator, <code><b>SETF</b></code>, which is used to assign new values to variables and just about every other place that can hold a value.
+        </p>
+        <h2>
+            <a name="variable-basics" id="variable-basics">Variable Basics</a>
+        </h2>
+        <p>
+            As in other languages, in Common Lisp variables are named places that can hold a value. However, in Common Lisp, variables aren't typed the way they are in languages such as Java or C++. That is, you don't need to declare the type of object that each variable can hold. Instead, a variable can hold values of any type and the values carry type information that can be used to check types at runtime. Thus, Common Lisp is <i>dynamically typed</i>--type errors are detected dynamically. For instance, if you pass something other than a number to the <code><b>+</b></code> function, Common Lisp will signal a type error. On the other hand, Common Lisp <i>is</i> a <i>strongly typed</i> language in the sense that all type errors will be detected--there's no way to treat an object as an instance of a class that it's not.<sup>3</sup>
+        </p>
+        <p>
+            All values in Common Lisp are, conceptually at least, references to objects.<sup>4</sup> Consequently, assigning a variable a new value changes <i>what</i> object the variable refers to but has no effect on the previously referenced object. However, if a variable holds a reference to a mutable object, you can use that reference to modify the object, and the modification will be visible to any code that has a reference to the same object.
+        </p>
+        <p>
+            One way to introduce new variables you've already used is to define function parameters. As you saw in the previous chapter, when you define a function with <code><b>DEFUN</b></code>, the parameter list defines the variables that will hold the function's arguments when it's called. For example, this function defines three variables--<code>x</code>, <code>y</code>, and <code>z</code>--to hold its arguments.
+        </p>
+        <pre>
+(defun foo (x y z) (+ x y z))
+</pre>
+        <p>
+            Each time a function is called, Lisp creates new <i>bindings</i> to hold the arguments passed by the function's caller. A binding is the runtime manifestation of a variable. A single variable--the thing you can point to in the program's source code--can have many different bindings during a run of the program. A single variable can even have multiple bindings at the same time; parameters to a recursive function, for example, are rebound for each call to the function.
+        </p>
+        <p>
+            As with all Common Lisp variables, function parameters hold object references.<sup>5</sup> Thus, you can assign a new value to a function parameter within the body of the function, and it will not affect the bindings created for another call to the same function. But if the object passed to a function is mutable and you change it in the function, the changes will be visible to the caller since both the caller and the callee will be referencing the same object.
+        </p>
+        <p>
+            Another form that introduces new variables is the <code><b>LET</b></code> special operator. The skeleton of a <code><b>LET</b></code> form looks like this:
+        </p>
+        <pre>
+(let (<i>variable</i>*)
+  <i>body-form</i>*)
+</pre>
+        <p>
+            where each <i>variable</i> is a variable initialization form. Each initialization form is either a list containing a variable name and an initial value form or--as a shorthand for initializing the variable to <code><b>NIL</b></code>--a plain variable name. The following <code><b>LET</b></code> form, for example, binds the three variables <code>x</code>, <code>y</code>, and <code>z</code> with initial values 10, 20, and <code><b>NIL</b></code>:
+        </p>
+        <pre>
+(let ((x 10) (y 20) z)
+  <i>...</i>)
+</pre>
+        <p>
+            When the <code><b>LET</b></code> form is evaluated, all the initial value forms are first evaluated. Then new bindings are created and initialized to the appropriate initial values before the body forms are executed. Within the body of the <code><b>LET</b></code>, the variable names refer to the newly created bindings. After the <code><b>LET</b></code>, the names refer to whatever, if anything, they referred to before the <code><b>LET</b></code>.
+        </p>
+        <p>
+            The value of the last expression in the body is returned as the value of the <code><b>LET</b></code> expression. Like function parameters, variables introduced with <code><b>LET</b></code> are rebound each time the <code><b>LET</b></code> is entered.<sup>6</sup>
+        </p>
+        <p>
+            The <i>scope</i> of function parameters and <code><b>LET</b></code> variables--the area of the program where the variable name can be used to refer to the variable's binding--is delimited by the form that introduces the variable. This form--the function definition or the <code><b>LET</b></code>--is called the <i>binding form</i>. As you'll see in a bit, the two types of variables--lexical and dynamic--use two slightly different scoping mechanisms, but in both cases the scope is delimited by the binding form.
+        </p>
+        <p>
+            If you nest binding forms that introduce variables with the same name, then the bindings of the innermost variable <i>shadows</i> the outer bindings. For instance, when the following function is called, a binding is created for the parameter <code>x</code> to hold the function's argument. Then the first <code><b>LET</b></code> creates a new binding with the initial value 2, and the inner <code><b>LET</b></code> creates yet another binding, this one with the initial value 3. The bars on the right mark the scope of each binding.
+        </p>
+        <pre>
+(defun foo (x)
+  (format t "Parameter: ~a~%" x)      ; |&lt;------ x is argument 
+  (let ((x 2))                        ; |
+    (format t "Outer LET: ~a~%" x)    ; | |&lt;---- x is 2
+    (let ((x 3))                      ; | |
+      (format t "Inner LET: ~a~%" x)) ; | | |&lt;-- x is 3
+    (format t "Outer LET: ~a~%" x))   ; | |
+  (format t "Parameter: ~a~%" x))     ; |
+</pre>
+        <p>
+            Each reference to <code>x</code> will refer to the binding with the smallest enclosing scope. Once control leaves the scope of one binding form, the binding from the immediately enclosing scope is unshadowed and <code>x</code> refers to it instead. Thus, calling <code>foo</code> results in this output:
+        </p>
+        <pre>
+CL-USER&gt; (foo 1)
+Parameter: 1
+Outer LET: 2
+Inner LET: 3
+Outer LET: 2
+Parameter: 1
+NIL
+</pre>
+        <p>
+            In future chapters I'll discuss other constructs that also serve as binding forms--any construct that introduces a new variable name that's usable only within the construct is a binding form.
+        </p>
+        <p>
+            For instance, in Chapter 7 you'll meet the <code><b>DOTIMES</b></code> loop, a basic counting loop. It introduces a variable that holds the value of a counter that's incremented each time through the loop. The following loop, for example, which prints the numbers from 0 to 9, binds the variable <code>x</code>:
+        </p>
+        <pre>
+(dotimes (x 10) (format t "~d " x))
+</pre>
+        <p>
+            Another binding form is a variant of <code><b>LET</b></code>, <code><b>LET*</b></code>. The difference is that in a <code><b>LET</b></code>, the variable names can be used only in the body of the <code><b>LET</b></code>--the part of the <code><b>LET</b></code> after the variables list--but in a <code><b>LET*</b></code>, the initial value forms for each variable can refer to variables introduced earlier in the variables list. Thus, you can write the following:
+        </p>
+        <pre>
+(let* ((x 10)
+       (y (+ x 10)))
+  (list x y))
+</pre>
+        <p>
+            but not this:
+        </p>
+        <pre>
+(let ((x 10)
+      (y (+ x 10)))
+  (list x y))
+</pre>
+        <p>
+            However, you could achieve the same result with nested <code><b>LET</b></code>s.
+        </p>
+        <pre>
+(let ((x 10))
+  (let ((y (+ x 10)))
+    (list x y)))
+</pre>
+        <h2>
+            <a name="lexical-variables-and-closures" id="lexical-variables-and-closures">Lexical Variables and Closures</a>
+        </h2>
+        <p>
+            By default all binding forms in Common Lisp introduce <i>lexically scoped</i> variables. Lexically scoped variables can be referred to only by code that's textually within the binding form. Lexical scoping should be familiar to anyone who has programmed in Java, C, Perl, or Python since they all provide lexically scoped "local" variables. For that matter, Algol programmers should also feel right at home, as Algol first introduced lexical scoping in the 1960s.
+        </p>
+        <p>
+            However, Common Lisp's lexical variables are lexical variables with a twist, at least compared to the original Algol model. The twist is provided by the combination of lexical scoping with nested functions. By the rules of lexical scoping, only code textually within the binding form can refer to a lexical variable. But what happens when an anonymous function contains a reference to a lexical variable from an enclosing scope? For instance, in this expression:
+        </p>
+        <pre>
+(let ((count 0)) #'(lambda () (setf count (1+ count))))
+</pre>
+        <p>
+            the reference to <code>count</code> inside the <code><b>LAMBDA</b></code> form should be legal according to the rules of lexical scoping. Yet the anonymous function containing the reference will be returned as the value of the <code><b>LET</b></code> form and can be invoked, via <code><b>FUNCALL</b></code>, by code that's <i>not</i> in the scope of the <code><b>LET</b></code>. So what happens? As it turns out, when <code>count</code> is a lexical variable, it just works. The binding of <code>count</code> created when the flow of control entered the <code><b>LET</b></code> form will stick around for as long as needed, in this case for as long as someone holds onto a reference to the function object returned by the <code><b>LET</b></code> form. The anonymous function is called a <i>closure</i> because it "closes over" the binding created by the <code><b>LET</b></code>.
+        </p>
+        <p>
+            The key thing to understand about closures is that it's the binding, not the value of the variable, that's captured. Thus, a closure can not only access the value of the variables it closes over but can also assign new values that will persist between calls to the closure. For instance, you can capture the closure created by the previous expression in a global variable like this:
+        </p>
+        <pre>
+(defparameter *fn* (let ((count 0)) #'(lambda () (setf count (1+ count)))))
+</pre>
+        <p>
+            Then each time you invoke it, the value of count will increase by one.
+        </p>
+        <pre>
+CL-USER&gt; (funcall *fn*)
+1
+CL-USER&gt; (funcall *fn*)
+2
+CL-USER&gt; (funcall *fn*)
+3
+</pre>
+        <p>
+            A single closure can close over many variable bindings simply by referring to them. Or multiple closures can capture the same binding. For instance, the following expression returns a list of three closures, one that increments the value of the closed over <code>count</code> binding, one that decrements it, and one that returns the current value:
+        </p>
+        <pre>
+(let ((count 0))
+  (list
+   #'(lambda () (incf count))
+   #'(lambda () (decf count))
+   #'(lambda () count)))
+</pre>
+        <h2>
+            <a name="dynamic-aka-special-variables" id="dynamic-aka-special-variables">Dynamic, a.k.a. Special, Variables</a>
+        </h2>
+        <p>
+            Lexically scoped bindings help keep code understandable by limiting the scope, literally, in which a given name has meaning. This is why most modern languages use lexical scoping for local variables. Sometimes, however, you really want a global variable--a variable that you can refer to from anywhere in your program. While it's true that indiscriminate use of global variables can turn code into spaghetti nearly as quickly as unrestrained use of <code>goto</code>, global variables do have legitimate uses and exist in one form or another in almost every programming language.<sup>7</sup> And as you'll see in a moment, Lisp's version of global variables, dynamic variables, are both more useful and more manageable.
+        </p>
+        <p>
+            Common Lisp provides two ways to create global variables: <code><b>DEFVAR</b></code> and <code><b>DEFPARAMETER</b></code>. Both forms take a variable name, an initial value, and an optional documentation string. After it has been <code><b>DEFVAR</b></code>ed or <code><b>DEFPARAMETER</b></code>ed, the name can be used anywhere to refer to the current binding of the global variable. As you've seen in previous chapters, global variables are conventionally named with names that start and end with <code>*</code>. You'll see later in this section why it's quite important to follow that naming convention. Examples of <code><b>DEFVAR</b></code> and <code><b>DEFPARAMETER</b></code> look like this:
+        </p>
+        <pre>
+(defvar *count* 0
+  "Count of widgets made so far.")
+
+(defparameter *gap-tolerance* 0.001
+  "Tolerance to be allowed in widget gaps.")
+</pre>
+        <p>
+            The difference between the two forms is that <code><b>DEFPARAMETER</b></code> always assigns the initial value to the named variable while <code><b>DEFVAR</b></code> does so only if the variable is undefined. A <code><b>DEFVAR</b></code> form can also be used with no initial value to define a global variable without giving it a value. Such a variable is said to be <i>unbound</i>.
+        </p>
+        <p>
+            Practically speaking, you should use <code><b>DEFVAR</b></code> to define variables that will contain data you'd want to keep even if you made a change to the source code that uses the variable. For instance, suppose the two variables defined previously are part of an application for controlling a widget factory. It's appropriate to define the <code>*count*</code> variable with <code><b>DEFVAR</b></code> because the number of widgets made so far isn't invalidated just because you make some changes to the widget-making code.<sup>8</sup>
+        </p>
+        <p>
+            On the other hand, the variable <code>*gap-tolerance*</code> presumably has some effect on the behavior of the widget-making code itself. If you decide you need a tighter or looser tolerance and change the value in the <code><b>DEFPARAMETER</b></code> form, you'd like the change to take effect when you recompile and reload the file.
+        </p>
+        <p>
+            After defining a variable with <code><b>DEFVAR</b></code> or <code><b>DEFPARAMETER</b></code>, you can refer to it from anywhere. For instance, you might define this function to increment the count of widgets made:
+        </p>
+        <pre>
+(defun increment-widget-count () (incf *count*))
+</pre>
+        <p>
+            The advantage of global variables is that you don't have to pass them around. Most languages store the standard input and output streams in global variables for exactly this reason--you never know when you're going to want to print something to standard out, and you don't want every function to have to accept and pass on arguments containing those streams just in case someone further down the line needs them.
+        </p>
+        <p>
+            However, once a value, such as the standard output stream, is stored in a global variable and you have written code that references that global variable, it's tempting to try to temporarily modify the behavior of that code by changing the variable's value.
+        </p>
+        <p>
+            For instance, suppose you're working on a program that contains some low-level logging functions that print to the stream in the global variable <code>*standard-output*</code>. Now suppose that in part of the program you want to capture all the output generated by those functions into a file. You might open a file and assign the resulting stream to <code>*standard-output*</code>. Now the low-level functions will send their output to the file.
+        </p>
+        <p>
+            This works fine until you forget to set <code>*standard-output*</code> back to the original stream when you're done. If you forget to reset <code>*standard-output*</code>, all the other code in the program that uses <code>*standard-output*</code> will also send its output to the file.<sup>9</sup>
+        </p>
+        <p>
+            What you really want, it seems, is a way to wrap a piece of code in something that says, "All code below here--all the functions it calls, all the functions they call, and so on, down to the lowest-level functions--should use <i>this</i> value for the global variable <code>*standard-output*</code>." Then when the high-level function returns, the old value of <code>*standard-output*</code> should be automatically restored.
+        </p>
+        <p>
+            It turns out that that's exactly what Common Lisp's other kind of variable--dynamic variables--let you do. When you bind a dynamic variable--for example, with a <code><b>LET</b></code> variable or a function parameter--the binding that's created on entry to the binding form replaces the global binding for the duration of the binding form. Unlike a lexical binding, which can be referenced by code only within the lexical scope of the binding form, a dynamic binding can be referenced by any code that's invoked during the execution of the binding form.<sup>10</sup> And it turns out that all global variables are, in fact, dynamic variables.
+        </p>
+        <p>
+            Thus, if you want to temporarily redefine <code>*standard-output*</code>, the way to do it is simply to rebind it, say, with a <code><b>LET</b></code>.
+        </p>
+        <pre>
+(let ((*standard-output* *some-other-stream*))
+  (stuff))
+</pre>
+        <p>
+            In any code that runs as a result of the call to <code>stuff</code>, references to <code>*standard-output*</code> will use the binding established by the <code><b>LET</b></code>. And when <code>stuff</code> returns and control leaves the <code><b>LET</b></code>, the new binding of <code>*standard-output*</code> will go away and subsequent references to <code>*standard-output*</code> will see the binding that was current before the <code><b>LET</b></code>. At any given time, the most recently established binding shadows all other bindings. Conceptually, each new binding for a given dynamic variable is pushed onto a stack of bindings for that variable, and references to the variable always use the most recent binding. As binding forms return, the bindings they created are popped off the stack, exposing previous bindings.<sup>11</sup>
+        </p>
+        <p>
+            A simple example shows how this works.
+        </p>
+        <pre>
+(defvar *x* 10)
+(defun foo () (format t "X: ~d~%" *x*))
+</pre>
+        <p>
+            The <code><b>DEFVAR</b></code> creates a global binding for the variable <code>*x*</code> with the value 10. The reference to <code>*x*</code> in <code>foo</code> will look up the current binding dynamically. If you call <code>foo</code> from the top level, the global binding created by the <code><b>DEFVAR</b></code> is the only binding available, so it prints 10.
+        </p>
+        <pre>
+CL-USER&gt; (foo)
+X: 10
+NIL
+</pre>
+        <p>
+            But you can use <code><b>LET</b></code> to create a new binding that temporarily shadows the global binding, and <code>foo</code> will print a different value.
+        </p>
+        <pre>
+CL-USER&gt; (let ((*x* 20)) (foo))
+X: 20
+NIL
+</pre>
+        <p>
+            Now call <code>foo</code> again, with no <code><b>LET</b></code>, and it again sees the global binding.
+        </p>
+        <pre>
+CL-USER&gt; (foo)
+X: 10
+NIL
+</pre>
+        <p>
+            Now define another function.
+        </p>
+        <pre>
+(defun bar ()
+  (foo)
+  (let ((*x* 20)) (foo))
+  (foo))
+</pre>
+        <p>
+            Note that the middle call to <code>foo</code> is wrapped in a <code><b>LET</b></code> that binds <code>*x*</code> to the new value 20. When you run <code>bar</code>, you get this result:
+        </p>
+        <pre>
+CL-USER&gt; (bar)
+X: 10
+X: 20
+X: 10
+NIL
+</pre>
+        <p>
+            As you can see, the first call to <code>foo</code> sees the global binding, with its value of 10. The middle call, however, sees the new binding, with the value 20. But after the <code><b>LET</b></code>, <code>foo</code> once again sees the global binding.
+        </p>
+        <p>
+            As with lexical bindings, assigning a new value affects only the current binding. To see this, you can redefine <code>foo</code> to include an assignment to <code>*x*</code>.
+        </p>
+        <pre>
+(defun foo ()
+  (format t "Before assignment~18tX: ~d~%" *x*)
+  (setf *x* (+ 1 *x*))
+  (format t "After assignment~18tX: ~d~%" *x*))
+</pre>
+        <p>
+            Now <code>foo</code> prints the value of <code>*x*</code>, increments it, and prints it again. If you just run <code>foo</code>, you'll see this:
+        </p>
+        <pre>
+CL-USER&gt; (foo)
+Before assignment X: 10
+After assignment  X: 11
+NIL
+</pre>
+        <p>
+            Not too surprising. Now run <code>bar</code>.
+        </p>
+        <pre>
+CL-USER&gt; (bar)
+Before assignment X: 11
+After assignment  X: 12
+Before assignment X: 20
+After assignment  X: 21
+Before assignment X: 12
+After assignment  X: 13
+NIL
+</pre>
+        <p>
+            Notice that <code>*x*</code> started at 11--the earlier call to <code>foo</code> really did change the global value. The first call to <code>foo</code> from <code>bar</code> increments the global binding to 12. The middle call doesn't see the global binding because of the <code><b>LET</b></code>. Then the last call can see the global binding again and increments it from 12 to 13.
+        </p>
+        <p>
+            So how does this work? How does <code><b>LET</b></code> know that when it binds <code>*x*</code> it's supposed to create a dynamic binding rather than a normal lexical binding? It knows because the name has been declared <i>special</i>.<sup>12</sup> The name of every variable defined with <code><b>DEFVAR</b></code> and <code><b>DEFPARAMETER</b></code> is automatically declared globally special. This means whenever you use such a name in a binding form--in a <code><b>LET</b></code> or as a function parameter or any other construct that creates a new variable binding--the binding that's created will be a dynamic binding. This is why the <code>*naming*</code> <code>*convention*</code> is so important--it'd be bad news if you used a name for what you thought was a lexical variable and that variable happened to be globally special. On the one hand, code you call could change the value of the binding out from under you; on the other, you might be shadowing a binding established by code higher up on the stack. If you always name global variables according to the <code>*</code> naming convention, you'll never accidentally use a dynamic binding where you intend to establish a lexical binding.
+        </p>
+        <p>
+            It's also possible to declare a name locally special. If, in a binding form, you declare a name special, then the binding created for that variable will be dynamic rather than lexical. Other code can locally declare a name special in order to refer to the dynamic binding. However, locally special variables are relatively rare, so you needn't worry about them.<sup>13</sup>
+        </p>
+        <p>
+            Dynamic bindings make global variables much more manageable, but it's important to notice they still allow action at a distance. Binding a global variable has two at a distance effects--it can change the behavior of downstream code, and it also opens the possibility that downstream code will assign a new value to a binding established higher up on the stack. You should use dynamic variables only when you need to take advantage of one or both of these characteristics.
+        </p>
+        <h2>
+            <a name="constants" id="constants">Constants</a>
+        </h2>
+        <p>
+            One other kind of variable I haven't mentioned at all is the oxymoronic "constant variable." All constants are global and are defined with <code><b>DEFCONSTANT</b></code>. The basic form of <code><b>DEFCONSTANT</b></code> is like <code><b>DEFPARAMETER</b></code>.
+        </p>
+        <pre>
+(defconstant <i>name</i> <i>initial-value-form</i> [ <i>documentation-string</i> ])
+</pre>
+        <p>
+            As with <code><b>DEFVAR</b></code> and <code><b>DEFPARAMETER</b></code>, <code><b>DEFCONSTANT</b></code> has a global effect on the name used--thereafter the name can be used only to refer to the constant; it can't be used as a function parameter or rebound with any other binding form. Thus, many Lisp programmers follow a naming convention of using names starting and ending with <code>+</code> for constants. This convention is somewhat less universally followed than the <code>*</code>-naming convention for globally special names but is a good idea for the same reason.<sup>14</sup>
+        </p>
+        <p>
+            Another thing to note about <code><b>DEFCONSTANT</b></code> is that while the language allows you to redefine a constant by reevaluating a <code><b>DEFCONSTANT</b></code> with a different initial-value-form, what exactly happens after the redefinition isn't defined. In practice, most implementations will require you to reevaluate any code that refers to the constant in order to see the new value since the old value may well have been inlined. Consequently, it's a good idea to use <code><b>DEFCONSTANT</b></code> only to define things that are <i>really</i> constant, such as the value of NIL. For things you might ever want to change, you should use <code><b>DEFPARAMETER</b></code> instead.
+        </p>
+        <h2>
+            <a name="assignment" id="assignment">Assignment</a>
+        </h2>
+        <p>
+            Once you've created a binding, you can do two things with it: get the current value and set it to a new value. As you saw in Chapter 4, a symbol evaluates to the value of the variable it names, so you can get the current value simply by referring to the variable. To assign a new value to a binding, you use the <code><b>SETF</b></code> macro, Common Lisp's general-purpose assignment operator. The basic form of <code><b>SETF</b></code> is as follows:
+        </p>
+        <pre>
+(setf <i>place</i> <i>value</i>)
+</pre>
+        <p>
+            Because <code><b>SETF</b></code> is a macro, it can examine the form of the <i>place</i> it's assigning to and expand into appropriate lower-level operations to manipulate that place. When the place is a variable, it expands into a call to the special operator <code><b>SETQ</b></code>, which, as a special operator, has access to both lexical and dynamic bindings.<sup>15</sup> For instance, to assign the value 10 to the variable <code>x</code>, you can write this:
+        </p>
+        <pre>
+(setf x 10)
+</pre>
+        <p>
+            As I discussed earlier, assigning a new value to a binding has no effect on any other bindings of that variable. And it doesn't have any effect on the value that was stored in the binding prior to the assignment. Thus, the <code><b>SETF</b></code> in this function:
+        </p>
+        <pre>
+(defun foo (x) (setf x 10))
+</pre>
+        <p>
+            will have no effect on any value outside of <code>foo</code>. The binding that was created when <code>foo</code> was called is set to 10, immediately replacing whatever value was passed as an argument. In particular, a form such as the following:
+        </p>
+        <pre>
+(let ((y 20))
+  (foo y)
+  (print y))
+</pre>
+        <p>
+            will print 20, not 10, as it's the value of <code>y</code> that's passed to <code>foo</code> where it's briefly the value of the variable <code>x</code> before the <code><b>SETF</b></code> gives <code>x</code> a new value.
+        </p>
+        <p>
+            <code><b>SETF</b></code> can also assign to multiple places in sequence. For instance, instead of the following:
+        </p>
+        <pre>
+(setf x 1)
+(setf y 2)
+</pre>
+        <p>
+            you can write this:
+        </p>
+        <pre>
+(setf x 1 y 2)
+</pre>
+        <p>
+            <code><b>SETF</b></code> returns the newly assigned value, so you can also nest calls to <code><b>SETF</b></code> as in the following expression, which assigns both <code>x</code> and <code>y</code> the same random value:
+        </p>
+        <pre>
+(setf x (setf y (random 10))) 
+</pre>
+        <h2>
+            <a name="generalized-assignment" id="generalized-assignment">Generalized Assignment</a>
+        </h2>
+        <p>
+            Variable bindings, of course, aren't the only places that can hold values. Common Lisp supports composite data structures such as arrays, hash tables, and lists, as well as user-defined data structures, all of which consist of multiple places that can each hold a value.
+        </p>
+        <p>
+            I'll cover those data structures in future chapters, but while we're on the topic of assignment, you should note that <code><b>SETF</b></code> can assign any place a value. As I cover the different composite data structures, I'll point out which functions can serve as "<code><b>SETF</b></code>able places." The short version, however, is if you need to assign a value to a place, <code><b>SETF</b></code> is almost certainly the tool to use. It's even possible to extend <code><b>SETF</b></code> to allow it to assign to user-defined places though I won't cover that.<sup>16</sup>
+        </p>
+        <p>
+            In this regard <code><b>SETF</b></code> is no different from the <code>=</code> assignment operator in most C-derived languages. In those languages, the <code>=</code> operator assigns new values to variables, array elements, and fields of classes. In languages such as Perl and Python that support hash tables as a built-in data type, <code>=</code> can also set the values of individual hash table entries. Table 6-1 summarizes the various ways <code>=</code> is used in those languages.
+        </p>
+        <div class="table-caption">
+            Table 6-1. Assignment with <code>=</code> in Other Languages
+        </div>
+        <table class="book-table">
+            <tr>
+                <td>
+                    <b>Assigning to ...</b>
+                </td>
+                <td>
+                    <b>Java, C, C++</b>
+                </td>
+                <td>
+                    <b>Perl</b>
+                </td>
+                <td>
+                    <b>Python</b>
+                </td>
+            </tr>
+            <tr>
+                <td>
+                    <b>... variable</b>
+                </td>
+                <td>
+                    <code>x = 10;</code>
+                </td>
+                <td>
+                    <code>$x = 10;</code>
+                </td>
+                <td>
+                    <code>x = 10</code>
+                </td>
+            </tr>
+            <tr>
+                <td>
+                    <b>... array element</b>
+                </td>
+                <td>
+                    <code>a[0] = 10;</code>
+                </td>
+                <td>
+                    <code>$a[0] = 10;</code>
+                </td>
+                <td>
+                    <code>a[0] = 10</code>
+                </td>
+            </tr>
+            <tr>
+                <td>
+                    <b>... hash table entry</b>
+                </td>
+                <td>
+                    <code>--</code>
+                </td>
+                <td>
+                    <code>$hash{'key'} = 10;</code>
+                </td>
+                <td>
+                    <code>hash['key'] = 10</code>
+                </td>
+            </tr>
+            <tr>
+                <td>
+                    <b>... field in object</b>
+                </td>
+                <td>
+                    <code>o.field = 10;</code>
+                </td>
+                <td>
+                    <code>$o-&gt;{'field'} = 10;</code>
+                </td>
+                <td>
+                    <code>o.field = 10</code>
+                </td>
+            </tr>
+        </table>
+        <p>
+            <code><b>SETF</b></code> works the same way--the first "argument" to <code><b>SETF</b></code> is a place to store the value, and the second argument provides the value. As with the <code>=</code> operator in these languages, you use the same form to express the place as you'd normally use to fetch the value.<sup>17</sup> Thus, the Lisp equivalents of the assignments in Table 6-1--given that <code><b>AREF</b></code> is the array access function, <code><b>GETHASH</b></code> does a hash table lookup, and <code>field</code> might be a function that accesses a slot named <code>field</code> of a user-defined object--are as follows:
+        </p>
+        <pre>
+Simple variable:    (setf x 10) 
+Array:              (setf (aref a 0) 10)
+Hash table:         (setf (gethash 'key hash) 10)
+Slot named 'field': (setf (field o) 10)
+</pre>
+        <p>
+            Note that <code><b>SETF</b></code>ing a place that's part of a larger object has the same semantics as <code><b>SETF</b></code>ing a variable: the place is modified without any effect on the object that was previously stored in the place. Again, this is similar to how <code><b>=</b></code> behaves in Java, Perl, and Python.<sup>18</sup>
+        </p>
+        <h2>
+            <a name="other-ways-to-modify-places" id="other-ways-to-modify-places">Other Ways to Modify Places</a>
+        </h2>
+        <p>
+            While all assignments can be expressed with <code><b>SETF</b></code>, certain patterns involving assigning a new value based on the current value are sufficiently common to warrant their own operators. For instance, while you could increment a number with <code><b>SETF</b></code>, like this:
+        </p>
+        <pre>
+(setf x (+ x 1))
+</pre>
+        <p>
+            or decrement it with this:
+        </p>
+        <pre>
+(setf x (- x 1))
+</pre>
+        <p>
+            it's a bit tedious, compared to the C-style <code>++x</code> and <code>--x</code>. Instead, you can use the macros <code><b>INCF</b></code> and <code><b>DECF</b></code>, which increment and decrement a place by a certain amount that defaults to 1.
+        </p>
+        <pre>
+(incf x)    === (setf x (+ x 1))
+(decf x)    === (setf x (- x 1))
+(incf x 10) === (setf x (+ x 10))
+</pre>
+        <p>
+            <code><b>INCF</b></code> and <code><b>DECF</b></code> are examples of a kind of macro called <i>modify macros</i>. Modify macros are macros built on top of <code><b>SETF</b></code> that modify places by assigning a new value based on the current value of the place. The main benefit of modify macros is that they're more concise than the same modification written out using <code><b>SETF</b></code>. Additionally, modify macros are defined in a way that makes them safe to use with places where the place expression must be evaluated only once. A silly example is this expression, which increments the value of an arbitrary element of an array:
+        </p>
+        <pre>
+(incf (aref *array* (random (length *array*))))
+</pre>
+        <p>
+            A naive translation of that into a <code><b>SETF</b></code> expression might look like this:
+        </p>
+        <pre>
+(setf (aref *array* (random (length *array*)))
+      (1+ (aref *array* (random (length *array*)))))
+</pre>
+        <p>
+            However, that doesn't work because the two calls to <code><b>RANDOM</b></code> won't necessarily return the same value--this expression will likely grab the value of one element of the array, increment it, and then store it back as the new value of a different element. The <code><b>INCF</b></code> expression, however, does the right thing because it knows how to take apart this expression:
+        </p>
+        <pre>
+(aref *array* (random (length *array*)))
+</pre>
+        <p>
+            to pull out the parts that could possibly have side effects to make sure they're evaluated only once. In this case, it would probably expand into something more or less equivalent to this:
+        </p>
+        <pre>
+(let ((tmp (random (length *array*))))
+  (setf (aref *array* tmp) (1+ (aref *array* tmp))))
+</pre>
+        <p>
+            In general, modify macros are guaranteed to evaluate both their arguments and the subforms of the place form exactly once each, in left-to-right order.
+        </p>
+        <p>
+            The macro <code><b>PUSH</b></code>, which you used in the mini-database to add elements to the <code>*db*</code> variable, is another modify macro. You'll take a closer look at how it and its counterparts <code><b>POP</b></code> and <code><b>PUSHNEW</b></code> work in Chapter 12 when I talk about how lists are represented in Lisp.
+        </p>
+        <p>
+            Finally, two slightly esoteric but useful modify macros are <code><b>ROTATEF</b></code> and <code><b>SHIFTF</b></code>. <code><b>ROTATEF</b></code> rotates values between places. For instance, if you have two variables, <code>a</code> and <code>b</code>, this call:
+        </p>
+        <pre>
+(rotatef a b)
+</pre>
+        <p>
+            swaps the values of the two variables and returns <code><b>NIL</b></code>. Since <code>a</code> and <code>b</code> are variables and you don't have to worry about side effects, the previous <code><b>ROTATEF</b></code> expression is equivalent to this:
+        </p>
+        <pre>
+(let ((tmp a)) (setf a b b tmp) nil)
+</pre>
+        <p>
+            With other kinds of places, the equivalent expression using <code><b>SETF</b></code> would be quite a bit more complex.
+        </p>
+        <p>
+            <code><b>SHIFTF</b></code> is similar except instead of rotating values it shifts them to the left--the last argument provides a value that's moved to the second-to-last argument while the rest of the values are moved one to the left. The original value of the first argument is simply returned. Thus, the following:
+        </p>
+        <pre>
+(shiftf a b 10)
+</pre>
+        <p>
+            is equivalent--again, since you don't have to worry about side effects--to this:
+        </p>
+        <pre>
+(let ((tmp a)) (setf a b b 10) tmp)
+</pre>
+        <p>
+            Both <code><b>ROTATEF</b></code> and <code><b>SHIFTF</b></code> can be used with any number of arguments and, like all modify macros, are guaranteed to evaluate them exactly once, in left to right order.
+        </p>
+        <p>
+            With the basics of Common Lisp's functions and variables under your belt, now you're ready to move onto the feature that continues to differentiate Lisp from other languages: macros.
+        </p>
+        <hr>
+        <div class="notes">
+            <p>
+                <sup>1</sup>Dynamic variables are also sometimes called <i>special</i> <i>variables</i> for reasons you'll see later in this chapter. It's important to be aware of this synonym, as some folks (and Lisp implementations) use one term while others use the other.
+            </p>
+            <p>
+                <sup>2</sup>Early Lisps tended to use dynamic variables for local variables, at least when interpreted. Elisp, the Lisp dialect used in Emacs, is a bit of a throwback in this respect, continuing to support only dynamic variables. Other languages have recapitulated this transition from dynamic to lexical variables--Perl's <code>local</code> variables, for instance, are dynamic while its <code>my</code> variables, introduced in Perl 5, are lexical. Python never had true dynamic variables but only introduced true lexical scoping in version 2.2. (Python's lexical variables are still somewhat limited compared to Lisp's because of the conflation of assignment and binding in the language's syntax.)
+            </p>
+            <p>
+                <sup>3</sup>Actually, it's not quite true to say that all type errors will always be detected--it's possible to use optional declarations to tell the compiler that certain variables will always contain objects of a particular type and to turn off runtime type checking in certain regions of code. However, declarations of this sort are used to optimize code after it has been developed and debugged, not during normal development.
+            </p>
+            <p>
+                <sup>4</sup>As an optimization certain kinds of objects, such as integers below a certain size and characters, may be represented directly in memory where other objects would be represented by a pointer to the actual object. However, since integers and characters are immutable, it doesn't matter that there may be multiple copies of "the same" object in different variables. This is the root of the difference between <code><b>EQ</b></code> and <code><b>EQL</b></code> discussed in Chapter 4.
+            </p>
+            <p>
+                <sup>5</sup>In compiler-writer terms Common Lisp functions are "pass-by-value." However, the values that are passed are references to objects. This is similar to how Java and Python work.
+            </p>
+            <p>
+                <sup>6</sup>The variables in <code><b>LET</b></code> forms and function parameters are created by exactly the same mechanism. In fact, in some Lisp dialects--though not Common Lisp--<code><b>LET</b></code> is simply a macro that expands into a call to an anonymous function. That is, in those dialects, the following:
+            </p>
+            <pre>
+(let ((x 10)) (format t "~a" x))
+</pre>
+            <p>
+                is a macro form that expands into this:
+            </p>
+            <pre>
+((lambda (x) (format t "~a" x)) 10)
+</pre>
+            <p>
+                <sup>7</sup>Java disguises global variables as public static fields, C uses <code>extern</code> variables, and Python's module-level and Perl's package-level variables can likewise be accessed from anywhere.
+            </p>
+            <p>
+                <sup>8</sup>If you specifically want to reset a <code><b>DEFVAR</b></code>ed variable, you can either set it directly with <code><b>SETF</b></code> or make it unbound using <code><b>MAKUNBOUND</b></code> and then reevaluate the <code><b>DEFVAR</b></code> form.
+            </p>
+            <p>
+                <sup>9</sup>The strategy of temporarily reassigning *standard-output* also breaks if the system is multithreaded--if there are multiple threads of control trying to print to different streams at the same time, they'll all try to set the global variable to the stream they want to use, stomping all over each other. You could use a lock to control access to the global variable, but then you're not really getting the benefit of multiple concurrent threads, since whatever thread is printing has to lock out all the other threads until it's done even if they want to print to a different stream.
+            </p>
+            <p>
+                <sup>10</sup>The technical term for the interval during which references may be made to a binding is its <i>extent</i>. Thus, <i>scope</i> and <i>extent</i> are complementary notions--scope refers to space while extent refers to time. Lexical variables have lexical scope but <i>indefinite</i> extent, meaning they stick around for an indefinite interval, determined by how long they're needed. Dynamic variables, by contrast, have indefinite scope since they can be referred to from anywhere but <i>dynamic</i> extent. To further confuse matters, the combination of indefinite scope and dynamic extent is frequently referred to by the misnomer <i>dynamic scope</i>.
+            </p>
+            <p>
+                <sup>11</sup>Though the standard doesn't specify how to incorporate multithreading into Common Lisp, implementations that provide multithreading follow the practice established on the Lisp machines and create dynamic bindings on a per-thread basis. A reference to a global variable will find the binding most recently established in the current thread, or the global binding.
+            </p>
+            <p>
+                <sup>12</sup>This is why dynamic variables are also sometimes called <i>special variables</i>.
+            </p>
+            <p>
+                <sup>13</sup>If you must know, you can look up <code><b>DECLARE</b></code>, <code><b>SPECIAL</b></code>, and <code><b>LOCALLY</b></code> in the HyperSpec.
+            </p>
+            <p>
+                <sup>14</sup>Several key constants defined by the language itself don't follow this convention--not least of which are <code><b>T</b></code> and <code><b>NIL</b></code>. This is occasionally annoying when one wants to use <code>t</code> as a local variable name. Another is <code><b>PI</b></code>, which holds the best long-float approximation of the mathematical constant pi.
+            </p>
+            <p>
+                <sup>15</sup>Some old-school Lispers prefer to use <code><b>SETQ</b></code> with variables, but modern style tends to use <code><b>SETF</b></code> for all assignments.
+            </p>
+            <p>
+                <sup>16</sup>Look up <code><b>DEFSETF</b></code>, <code><b>DEFINE-SETF-EXPANDER</b></code> for more information.
+            </p>
+            <p>
+                <sup>17</sup>The prevalence of Algol-derived syntax for assignment with the "place" on the left side of the <code>=</code> and the new value on the right side has spawned the terminology <i>lvalue</i>, short for "left value," meaning something that can be assigned to, and <i>rvalue</i>, meaning something that provides a value. A compiler hacker would say, "<code><b>SETF</b></code> treats its first argument as an lvalue."
+            </p>
+            <p>
+                <sup>18</sup>C programmers may want to think of variables and other places as holding a pointer to the real object; assigning to a variable simply changes what object it points to while assigning to a part of a composite object is similar to indirecting through the pointer to the actual object. C++ programmers should note that the behavior of <code>=</code> in C++ when dealing with objects--namely, a memberwise copy--is quite idiosyncratic.
+            </p>
+        </div>
+        <div class="copyright">
+            Copyright © 2003-2005, Peter Seibel
+        </div>
+    </body>
+</html>

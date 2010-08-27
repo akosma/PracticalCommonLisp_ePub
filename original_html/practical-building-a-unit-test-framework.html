@@ -1,0 +1,386 @@
+<HTML><HEAD><TITLE>Practical: Building a Unit Test Framework</TITLE><LINK REL="stylesheet" TYPE="text/css" HREF="style.css"/></HEAD><BODY><DIV CLASS="copyright">Copyright &copy; 2003-2005, Peter Seibel</DIV><H1>9. Practical: Building a Unit Test Framework</H1><P>In this chapter you'll return to cutting code and develop a simple
+unit testing framework for Lisp. This will give you a chance to use
+some of the features you've learned about since Chapter 3, including
+macros and dynamic variables, in real code.</P><P>The main design goal of the test framework will be to make it as easy
+as possible to add new tests, to run various suites of tests, and to
+track down test failures. For now you'll focus on designing a
+framework you can use during interactive development.</P><P>The key feature of an automated testing framework is that the
+framework is responsible for telling you whether all the tests
+passed. You don't want to spend your time slogging through test
+output checking answers when the computer can do it much more quickly
+and accurately. Consequently, each test case must be an expression
+that yields a boolean value--true or false, pass or fail. For
+instance, if you were writing tests for the built-in <CODE><B>+</B></CODE> function,
+these might be reasonable test cases:<SUP>1</SUP></P><PRE>(= (+ 1 2) 3)
+(= (+ 1 2 3) 6)
+(= (+ -1 -3) -4)</PRE><P>Functions that have side effects will be tested slightly
+differently--you'll have to call the function and then check for
+evidence of the expected side effects.<SUP>2</SUP> But in the end, every test case has to boil down to a
+boolean expression, thumbs up or thumbs down. </P><A NAME="two-first-tries"><H2>Two First Tries</H2></A><P>If you were doing ad hoc testing, you could enter these expressions
+at the REPL and check that they return <CODE><B>T</B></CODE>. But you want a
+framework that makes it easy to organize and run these test cases
+whenever you want. If you want to start with the simplest thing that
+could possibly work, you can just write a function that evaluates the
+test cases and <CODE><B>AND</B></CODE>s the results together.</P><PRE>(defun test-+ ()
+  (and
+    (= (+ 1 2) 3)
+    (= (+ 1 2 3) 6)
+    (= (+ -1 -3) -4)))</PRE><P>Whenever you want to run this set of test cases, you can call
+<CODE>test-+</CODE>.</P><PRE>CL-USER&gt; (test-+)
+T</PRE><P>As long as it returns <CODE><B>T</B></CODE>, you know the test cases are passing.
+This way of organizing tests is also pleasantly concise--you don't
+have to write a bunch of test bookkeeping code. However, as you'll
+discover the first time a test case fails, the result reporting
+leaves something to be desired. When <CODE>test-+</CODE> returns <CODE><B>NIL</B></CODE>,
+you'll know something failed, but you'll have no idea which test case
+it was.</P><P>So let's try another simple--even simpleminded--approach. To find out
+what happens to each test case, you could write something like this:</P><PRE>(defun test-+ ()
+  (format t &quot;~:[FAIL~;pass~] ... ~a~%&quot; (= (+ 1 2) 3) '(= (+ 1 2) 3))
+  (format t &quot;~:[FAIL~;pass~] ... ~a~%&quot; (= (+ 1 2 3) 6) '(= (+ 1 2 3) 6))
+  (format t &quot;~:[FAIL~;pass~] ... ~a~%&quot; (= (+ -1 -3) -4) '(= (+ -1 -3) -4)))</PRE><P>Now each test case will be reported individually. The
+<CODE>~:[FAIL~;pass~]</CODE> part of the <CODE><B>FORMAT</B></CODE> directive causes
+<CODE><B>FORMAT</B></CODE> to print &quot;FAIL&quot; if the first format argument is false and
+&quot;pass&quot; otherwise.<SUP>3</SUP> Then you label the result
+with the test expression itself. Now running <CODE>test-+</CODE> shows you
+exactly what's going on.</P><PRE>CL-USER&gt; (test-+)
+pass ... (= (+ 1 2) 3)
+pass ... (= (+ 1 2 3) 6)
+pass ... (= (+ -1 -3) -4)
+NIL</PRE><P>This time the result reporting is more like what you want, but the
+code itself is pretty gross. The repeated calls to <CODE><B>FORMAT</B></CODE> as
+well as the tedious duplication of the test expression cry out to be
+refactored. The duplication of the test expression is particularly
+grating because if you mistype it, the test results will be
+mislabeled.</P><P>Another problem is that you don't get a single indicator whether all
+the test cases passed. It's easy enough, with only three test cases,
+to scan the output looking for &quot;FAIL&quot;; however, when you have
+hundreds of test cases, it'll be more of a hassle.</P><A NAME="refactoring"><H2>Refactoring</H2></A><P>What you'd really like is a way to write test functions as
+streamlined as the first <CODE>test-+</CODE> that return a single <CODE><B>T</B></CODE> or
+<CODE><B>NIL</B></CODE> value but that also report on the results of individual test
+cases like the second version. Since the second version is close to
+what you want in terms of functionality, your best bet is to see if
+you can factor out some of the annoying duplication.</P><P>The simplest way to get rid of the repeated similar calls to
+<CODE><B>FORMAT</B></CODE> is to create a new function.</P><PRE>(defun report-result (result form)
+  (format t &quot;~:[FAIL~;pass~] ... ~a~%&quot; result form))</PRE><P>Now you can write <CODE>test-+</CODE> with calls to <CODE>report-result</CODE>
+instead of <CODE><B>FORMAT</B></CODE>. It's not a huge improvement, but at least now
+if you decide to change the way you report results, there's only one
+place you have to change.</P><PRE>(defun test-+ ()
+  (report-result (= (+ 1 2) 3) '(= (+ 1 2) 3))
+  (report-result (= (+ 1 2 3) 6) '(= (+ 1 2 3) 6))
+  (report-result (= (+ -1 -3) -4) '(= (+ -1 -3) -4)))</PRE><P>Next you need to get rid of the duplication of the test case
+expression, with its attendant risk of mislabeling of results. What
+you'd really like is to be able to treat the expression as both code
+(to get the result) and data (to use as the label). Whenever you want
+to treat code as data, that's a sure sign you need a macro. Or, to
+look at it another way, what you need is a way to automate writing
+the error-prone <CODE>report-result</CODE> calls. You'd like to be able to
+say something like this: </P><PRE>(check (= (+ 1 2) 3))</PRE><P>and have it mean the following:</P><PRE>(report-result (= (+ 1 2) 3) '(= (+ 1 2) 3))</PRE><P>Writing a macro to do this translation is trivial.</P><PRE>(defmacro check (form)
+  `(report-result ,form ',form))</PRE><P>Now you can change <CODE>test-+</CODE> to use <CODE>check</CODE>.</P><PRE>(defun test-+ ()
+  (check (= (+ 1 2) 3))
+  (check (= (+ 1 2 3) 6))
+  (check (= (+ -1 -3) -4)))</PRE><P>Since you're on the hunt for duplication, why not get rid of those
+repeated calls to <CODE>check</CODE>? You can define <CODE>check</CODE> to take
+an arbitrary number of forms and wrap them each in a call to
+<CODE>report-result</CODE>. </P><PRE>(defmacro check (&amp;body forms)
+  `(progn
+     ,@(loop for f in forms collect `(report-result ,f ',f))))</PRE><P>This definition uses a common macro idiom of wrapping a <CODE><B>PROGN</B></CODE>
+around a series of forms in order to turn them into a single form.
+Notice also how you can use <CODE>,@</CODE> to splice in the result of an
+expression that returns a list of expressions that are themselves
+generated with a backquote template.</P><P>With the new version of <CODE>check</CODE> you can write a new version of
+<CODE>test-+</CODE> like this:</P><PRE>(defun test-+ ()
+  (check
+    (= (+ 1 2) 3)
+    (= (+ 1 2 3) 6)
+    (= (+ -1 -3) -4)))</PRE><P>that is equivalent to the following code:</P><PRE>(defun test-+ ()
+  (progn
+    (report-result (= (+ 1 2) 3) '(= (+ 1 2) 3))
+    (report-result (= (+ 1 2 3) 6) '(= (+ 1 2 3) 6))
+    (report-result (= (+ -1 -3) -4) '(= (+ -1 -3) -4))))</PRE><P>Thanks to <CODE>check</CODE>, this version is as concise as the first
+version of <CODE>test-+</CODE> but expands into code that does the same
+thing as the second version. And now any changes you want to make to
+how <CODE>test-+</CODE> behaves, you can make by changing <CODE>check</CODE>. </P><A NAME="fixing-the-return-value"><H2>Fixing the Return Value</H2></A><P>You can start with fixing <CODE>test-+</CODE> so its return value indicates
+whether all the test cases passed. Since <CODE>check</CODE> is responsible
+for generating the code that ultimately runs the test cases, you just
+need to change it to generate code that also keeps track of the
+results.</P><P>As a first step, you can make a small change to <CODE>report-result</CODE>
+so it returns the result of the test case it's reporting.</P><PRE>(defun report-result (result form)
+  (format t &quot;~:[FAIL~;pass~] ... ~a~%&quot; result form)
+  result)</PRE><P>Now that <CODE>report-result</CODE> returns the result of its test case, it
+might seem you could just change the <CODE><B>PROGN</B></CODE> to an <CODE><B>AND</B></CODE> to
+combine the results. Unfortunately, <CODE><B>AND</B></CODE> doesn't do quite what
+you want in this case because of its short-circuiting behavior: as
+soon as one test case fails, <CODE><B>AND</B></CODE> will skip the rest. On the
+other hand, if you had a construct that worked like <CODE><B>AND</B></CODE> without
+the short-circuiting, you could use it in the place of <CODE><B>PROGN</B></CODE>,
+and you'd be done. Common Lisp doesn't provide such a construct, but
+that's no reason you can't use it: it's a trivial matter to write a
+macro to provide it yourself. </P><P>Leaving test cases aside for a moment, what you want is a
+macro--let's call it <CODE>combine-results</CODE>--that will let you say
+this:</P><PRE>(combine-results
+  (foo)
+  (bar)
+  (baz))</PRE><P>and have it mean something like this:</P><PRE>(let ((result t))
+  (unless (foo) (setf result nil))
+  (unless (bar) (setf result nil))
+  (unless (baz) (setf result nil))
+  result)</PRE><P>The only tricky bit to writing this macro is that you need to
+introduce a variable--<CODE>result</CODE> in the previous code--in the
+expansion. As you saw in the previous chapter, using a literal name
+for variables in macro expansions can introduce a leak in your macro
+abstraction, so you'll need to create a unique name. This is a job
+for <CODE>with-gensyms</CODE>. You can define <CODE>combine-results</CODE> like
+this: </P><PRE>(defmacro combine-results (&amp;body forms)
+  (with-gensyms (result)
+    `(let ((,result t))
+      ,@(loop for f in forms collect `(unless ,f (setf ,result nil)))
+      ,result)))</PRE><P>Now you can fix <CODE>check</CODE> by simply changing the expansion to use
+<CODE>combine-results</CODE> instead of <CODE><B>PROGN</B></CODE>.</P><PRE>(defmacro check (&amp;body forms)
+  `(combine-results
+    ,@(loop for f in forms collect `(report-result ,f ',f))))</PRE><P>With that version of <CODE>check</CODE>, <CODE>test-+</CODE> should emit the
+results of its three test expressions and then return <CODE><B>T</B></CODE> to
+indicate that everything passed.<SUP>4</SUP></P><PRE>CL-USER&gt; (test-+)
+pass ... (= (+ 1 2) 3)
+pass ... (= (+ 1 2 3) 6)
+pass ... (= (+ -1 -3) -4)
+T</PRE><P>And if you change one of the test cases so it fails,<SUP>5</SUP> the final return value changes to <CODE><B>NIL</B></CODE>.</P><PRE>CL-USER&gt; (test-+)
+pass ... (= (+ 1 2) 3)
+pass ... (= (+ 1 2 3) 6)
+FAIL ... (= (+ -1 -3) -5)
+NIL</PRE><A NAME="better-result-reporting"><H2>Better Result Reporting</H2></A><P>As long as you have only one test function, the current result
+reporting is pretty clear. If a particular test case fails, all you
+have to do is find the test case in the <CODE>check</CODE> form and figure
+out why it's failing. But if you write a lot of tests, you'll
+probably want to organize them somehow, rather than shoving them all
+into one function. For instance, suppose you wanted to add some test
+cases for the <CODE>*</CODE> function. You might write a new test function.</P><PRE>(defun test-* ()
+  (check
+    (= (* 2 2) 4)
+    (= (* 3 5) 15)))</PRE><P>Now that you have two test functions, you'll probably want another
+function that runs all the tests. That's easy enough.</P><PRE>(defun test-arithmetic ()
+  (combine-results
+   (test-+)
+   (test-*)))</PRE><P>In this function you use <CODE>combine-results</CODE> instead of
+<CODE>check</CODE> since both <CODE>test-+</CODE> and <CODE>test-*</CODE> will take
+care of reporting their own results. When you run
+<CODE>test-arithmetic</CODE>, you'll get the following results: </P><PRE>CL-USER&gt; (test-arithmetic)
+pass ... (= (+ 1 2) 3)
+pass ... (= (+ 1 2 3) 6)
+pass ... (= (+ -1 -3) -4)
+pass ... (= (* 2 2) 4)
+pass ... (= (* 3 5) 15)
+T</PRE><P>Now imagine that one of the test cases failed and you need to track
+down the problem. With only five test cases and two test functions,
+it won't be too hard to find the code of the failing test case. But
+suppose you had 500 test cases spread across 20 functions. It might
+be nice if the results told you what function each test case came
+from.</P><P>Since the code that prints the results is centralized in
+<CODE>report-result</CODE>, you need a way to pass information about what
+test function you're in to <CODE>report-result</CODE>. You could add a
+parameter to <CODE>report-result</CODE> to pass this information, but
+<CODE>check</CODE>, which generates the calls to <CODE>report-result</CODE>,
+doesn't know what function it's being called from, which means you'd
+also have to change the way you call <CODE>check</CODE>, passing it an
+argument that it simply passes onto <CODE>report-result</CODE>. </P><P>This is exactly the kind of problem dynamic variables were designed
+to solve. If you create a dynamic variable that each test function
+binds to the name of the function before calling <CODE>check</CODE>, then
+<CODE>report-result</CODE> can use it without <CODE>check</CODE> having to know
+anything about it.</P><P>Step one is to declare the variable at the top level.</P><PRE>(defvar *test-name* nil)</PRE><P>Now you need to make another tiny change to <CODE>report-result</CODE> to
+include <CODE>*test-name*</CODE> in the <CODE><B>FORMAT</B></CODE> output.</P><PRE>(format t &quot;~:[FAIL~;pass~] ... ~a: ~a~%&quot; result *test-name* form)</PRE><P>With those changes, the test functions will still work but will
+produce the following output because <CODE>*test-name*</CODE> is never
+rebound: </P><PRE>CL-USER&gt; (test-arithmetic)
+pass ... NIL: (= (+ 1 2) 3)
+pass ... NIL: (= (+ 1 2 3) 6)
+pass ... NIL: (= (+ -1 -3) -4)
+pass ... NIL: (= (* 2 2) 4)
+pass ... NIL: (= (* 3 5) 15)
+T</PRE><P>For the name to be reported properly, you need to change the two test
+functions.</P><PRE>(defun test-+ ()
+  (let ((*test-name* 'test-+))
+    (check
+      (= (+ 1 2) 3)
+      (= (+ 1 2 3) 6)
+      (= (+ -1 -3) -4))))
+
+(defun test-* ()
+  (let ((*test-name* 'test-*))
+    (check
+      (= (* 2 2) 4)
+      (= (* 3 5) 15))))</PRE><P>Now the results are properly labeled. </P><PRE>CL-USER&gt; (test-arithmetic)
+pass ... TEST-+: (= (+ 1 2) 3)
+pass ... TEST-+: (= (+ 1 2 3) 6)
+pass ... TEST-+: (= (+ -1 -3) -4)
+pass ... TEST-*: (= (* 2 2) 4)
+pass ... TEST-*: (= (* 3 5) 15)
+T</PRE><A NAME="an-abstraction-emerges"><H2>An Abstraction Emerges</H2></A><P>In fixing the test functions, you've introduced several new bits of
+duplication. Not only does each function have to include the name of
+the function twice--once as the name in the <CODE><B>DEFUN</B></CODE> and once in
+the binding of <CODE>*test-name*</CODE>--but the same three-line code
+pattern is duplicated between the two functions. You could remove the
+duplication simply on the grounds that duplication is bad. But if you
+look more closely at the root cause of the duplication, you can learn
+an important lesson about how to use macros.</P><P>The reason both these functions start the same way is because they're
+both test functions. The duplication arises because, at the moment,
+<I>test function</I> is only half an abstraction. The abstraction exists
+in your mind, but in the code there's no way to express &quot;this is a
+test function&quot; other than to write code that follows a particular
+pattern.</P><P>Unfortunately, partial abstractions are a crummy tool for building
+software. Because a half abstraction is expressed in code by a
+manifestation of the pattern, you're guaranteed to have massive code
+duplication with all the normal bad consequences that implies for
+maintainability. More subtly, because the abstraction exists only in
+the minds of programmers, there's no mechanism to make sure different
+programmers (or even the same programmer working at different times)
+actually understand the abstraction the same way. To make a complete
+abstraction, you need a way to express &quot;this is a test function&quot; and
+have all the code required by the pattern be generated for you. In
+other words, you need a macro.</P><P>Because the pattern you're trying to capture is a <CODE><B>DEFUN</B></CODE> plus
+some boilerplate code, you need to write a macro that will expand
+into a <CODE><B>DEFUN</B></CODE>. You'll then use this macro, instead of a plain
+<CODE><B>DEFUN</B></CODE> to define test functions, so it makes sense to call it
+<CODE>deftest</CODE>.</P><PRE>(defmacro deftest (name parameters &amp;body body)
+  `(defun ,name ,parameters
+    (let ((*test-name* ',name))
+      ,@body)))</PRE><P>With this macro you can rewrite <CODE>test-+</CODE> as follows:</P><PRE>(deftest test-+ ()
+  (check
+    (= (+ 1 2) 3)
+    (= (+ 1 2 3) 6)
+    (= (+ -1 -3) -4)))</PRE><A NAME="a-hierarchy-of-tests"><H2>A Hierarchy of Tests</H2></A><P>Now that you've established test functions as first-class citizens,
+the question might arise, should <CODE>test-arithmetic</CODE> be a test
+function? As things stand, it doesn't really matter--if you did
+define it with <CODE>deftest</CODE>, its binding of <CODE>*test-name*</CODE>
+would be shadowed by the bindings in <CODE>test-+</CODE> and <CODE>test-*</CODE>
+before any results are reported.</P><P>But now imagine you've got thousands of test cases to organize. The
+first level of organization is provided by test functions such as
+<CODE>test-+</CODE> and <CODE>test-*</CODE> that directly call <CODE>check</CODE>. But
+with thousands of test cases, you'll likely need other levels of
+organization. Functions such as <CODE>test-arithmetic</CODE> can group
+related test functions into test suites. Now suppose some low-level
+test functions are called from multiple test suites. It's not unheard
+of for a test case to pass in one context but fail in another. If
+that happens, you'll probably want to know more than just what
+low-level test function contains the test case.</P><P>If you define the test suite functions such as <CODE>test-arithmetic</CODE>
+with <CODE>deftest</CODE> and make a small change to the <CODE>*test-name*</CODE>
+bookkeeping, you can have results reported with a &quot;fully qualified&quot;
+path to the test case, something like this: </P><PRE>pass ... (TEST-ARITHMETIC TEST-+): (= (+ 1 2) 3)</PRE><P>Because you've already abstracted the process of defining a test
+function, you can change the bookkeeping details without modifying
+the code of the test functions.<SUP>6</SUP> To make <CODE>*test-name*</CODE> hold a list of test
+function names instead of just the name of the most recently entered
+test function, you just need to change this binding form:</P><PRE>(let ((*test-name* ',name))</PRE><P>to the following:</P><PRE>(let ((*test-name* (append *test-name* (list ',name))))</PRE><P>Since <CODE><B>APPEND</B></CODE> returns a new list made up of the elements of its
+arguments, this version will bind <CODE>*test-name*</CODE> to a list
+containing the old contents of <CODE>*test-name*</CODE> with the new name
+tacked onto the end.<SUP>7</SUP> When
+each test function returns, the old value of <CODE>*test-name*</CODE> will
+be restored.</P><P>Now you can redefine <CODE>test-arithmetic</CODE> with <CODE>deftest</CODE>
+instead of <CODE><B>DEFUN</B></CODE>.</P><PRE>(deftest test-arithmetic ()
+  (combine-results
+   (test-+)
+   (test-*)))</PRE><P>The results now show exactly how you got to each test expression. </P><PRE>CL-USER&gt; (test-arithmetic)
+pass ... (TEST-ARITHMETIC TEST-+): (= (+ 1 2) 3)
+pass ... (TEST-ARITHMETIC TEST-+): (= (+ 1 2 3) 6)
+pass ... (TEST-ARITHMETIC TEST-+): (= (+ -1 -3) -4)
+pass ... (TEST-ARITHMETIC TEST-*): (= (* 2 2) 4)
+pass ... (TEST-ARITHMETIC TEST-*): (= (* 3 5) 15)
+T</PRE><P>As your test suite grows, you can add new layers of test functions;
+as long as they're defined with <CODE>deftest</CODE>, the results will be
+reported correctly. For instance, the following:</P><PRE>(deftest test-math ()
+  (test-arithmetic))</PRE><P>would generate these results: </P><PRE>CL-USER&gt; (test-math)
+pass ... (TEST-MATH TEST-ARITHMETIC TEST-+): (= (+ 1 2) 3)
+pass ... (TEST-MATH TEST-ARITHMETIC TEST-+): (= (+ 1 2 3) 6)
+pass ... (TEST-MATH TEST-ARITHMETIC TEST-+): (= (+ -1 -3) -4)
+pass ... (TEST-MATH TEST-ARITHMETIC TEST-*): (= (* 2 2) 4)
+pass ... (TEST-MATH TEST-ARITHMETIC TEST-*): (= (* 3 5) 15)
+T</PRE><A NAME="wrapping-up"><H2>Wrapping Up</H2></A><P>You could keep going, adding more features to this test framework.
+But as a framework for writing tests with a minimum of busywork and
+easily running them from the REPL, this is a reasonable start. Here's
+the complete code, all 26 lines of it:</P><PRE>(defvar *test-name* nil)
+
+(defmacro deftest (name parameters &amp;body body)
+  &quot;Define a test function. Within a test function we can call
+   other test functions or use 'check' to run individual test
+   cases.&quot;
+  `(defun ,name ,parameters
+    (let ((*test-name* (append *test-name* (list ',name))))
+      ,@body)))
+
+(defmacro check (&amp;body forms)
+  &quot;Run each expression in 'forms' as a test case.&quot;
+  `(combine-results
+    ,@(loop for f in forms collect `(report-result ,f ',f))))
+
+(defmacro combine-results (&amp;body forms)
+  &quot;Combine the results (as booleans) of evaluating 'forms' in order.&quot;
+  (with-gensyms (result)
+    `(let ((,result t))
+      ,@(loop for f in forms collect `(unless ,f (setf ,result nil)))
+      ,result)))
+
+(defun report-result (result form)
+  &quot;Report the results of a single test case. Called by 'check'.&quot;
+  (format t &quot;~:[FAIL~;pass~] ... ~a: ~a~%&quot; result *test-name* form)
+  result)</PRE><P>It's worth reviewing how you got here because it's illustrative of
+how programming in Lisp often goes.</P><P>You started by defining a simple version of your problem--how to
+evaluate a bunch of boolean expressions and find out if they all
+returned true. Just <CODE><B>AND</B></CODE>ing them together worked and was
+syntactically clean but revealed the need for better result
+reporting. So you wrote some really simpleminded code, chock-full of
+duplication and error-prone idioms that reported the results the way
+you wanted.</P><P>The next step was to see if you could refactor the second version
+into something as clean as the former. You started with a standard
+refactoring technique of extracting some code into a function,
+<CODE>report-result</CODE>. Unfortunately, you could see that using
+<CODE>report-result</CODE> was going to be tedious and error-prone since
+you had to pass the test expression twice, once for the value and
+once as quoted data. So you wrote the <CODE>check</CODE> macro to automate
+the details of calling <CODE>report-result</CODE> correctly.</P><P>While writing <CODE>check</CODE>, you realized as long as you were
+generating code, you could make a single call to <CODE>check</CODE> to
+generate multiple calls to <CODE>report-result</CODE>, getting you back to
+a version of <CODE>test-+</CODE> about as concise as the original <CODE><B>AND</B></CODE>
+version.</P><P>At that point you had the <CODE>check</CODE> API nailed down, which allowed
+you to start mucking with how it worked on the inside. The next task
+was to fix <CODE>check</CODE> so the code it generated would return a
+boolean indicating whether all the test cases had passed. Rather than
+immediately hacking away at <CODE>check</CODE>, you paused to indulge in a
+little language design by fantasy. What if--you fantasized--there was
+already a non-short-circuiting <CODE><B>AND</B></CODE> construct. Then fixing
+<CODE>check</CODE> would be trivial. Returning from fantasyland you
+realized there was no such construct but that you could write one in
+a few lines. After writing <CODE>combine-results</CODE>, the fix to
+<CODE>check</CODE> was indeed trivial.</P><P>At that point all that was left was to make a few more improvements
+to the way you reported test results. Once you started making changes
+to the test functions, you realized those functions represented a
+special category of function that deserved its own abstraction. So
+you wrote <CODE>deftest</CODE> to abstract the pattern of code that turns a
+regular function into a test function.</P><P>With <CODE>deftest</CODE> providing an abstraction barrier between the test
+definitions and the underlying machinery, you were able to enhance
+the result reporting without touching the test functions.</P><P>Now, with the basics of functions, variables, and macros mastered,
+and a little practical experience using them, you're ready to start
+exploring Common Lisp's rich standard library of functions and data
+types.
+</P><HR/><DIV CLASS="notes"><P><SUP>1</SUP>This is for illustrative
+purposes only--obviously, writing test cases for built-in functions
+such as <CODE><B>+</B></CODE> is a bit silly, since if such basic things aren't
+working, the chances the tests will be running the way you expect is
+pretty slim. On the other hand, most Common Lisps are implemented
+largely in Common Lisp, so it's not crazy to imagine writing test
+suites in Common Lisp to test the standard library functions.</P><P><SUP>2</SUP>Side effects can include
+such things as signaling errors; I'll discuss Common Lisp's error
+handling system in Chapter 19. You may, after reading that chapter,
+want to think about how to incorporate tests that check whether a
+function does or does not signal a particular error in certain
+situations.</P><P><SUP>3</SUP>I'll discuss this and other <CODE><B>FORMAT</B></CODE>
+directives in more detail in Chapter 18.</P><P><SUP>4</SUP>If <CODE>test-+</CODE> has been
+compiled--which may happen implicitly in certain Lisp
+implementations--you may need to reevaluate the definition of
+<CODE>test-+</CODE> to get the changed definition of <CODE>check</CODE> to affect
+the behavior of <CODE>test-+</CODE>. Interpreted code, on the other hand,
+typically expands macros anew each time the code is interpreted,
+allowing the effects of macro redefinitions to be seen immediately.</P><P><SUP>5</SUP>You have to
+change the test to make it fail since you can't change the behavior
+of <CODE><B>+</B></CODE>.</P><P><SUP>6</SUP>Though, again, if the test
+functions have been compiled, you'll have to recompile them after
+changing the macro.</P><P><SUP>7</SUP>As you'll see in Chapter 12, <CODE><B>APPEND</B></CODE>ing
+to the end of a list isn't the most efficient way to build a list.
+But for now this is sufficient--as long as the test hierarchies
+aren't too deep, it should be fine. And if it becomes a problem, all
+you'll have to do is change the definition of <CODE>deftest</CODE>.</P></DIV></BODY></HTML>

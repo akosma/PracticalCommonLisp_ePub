@@ -1,0 +1,663 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.01//EN">
+<html>
+    <head>
+        <title>
+            LOOP for Black Belts
+        </title>
+        <link rel="stylesheet" type="text/css" href="style.css">
+    </head>
+    <body>
+        <h1>
+            22. LOOP for Black Belts
+        </h1>
+        <p>
+            In Chapter 7 I briefly discussed the extended <code><b>LOOP</b></code> macro. As I mentioned then, <code><b>LOOP</b></code> provides what is essentially a special-purpose language just for writing iteration constructs.
+        </p>
+        <p>
+            This might seem like a lot of bother--inventing a whole language just for writing loops. But if you think about the ways loops are used in programs, it actually makes a fair bit of sense. Any program of any size at all will contain quite a number of loops. And while they won't all be the same, they won't all be unique either; patterns will emerge, particularly if you include the code immediately preceding and following the loops--patterns of how things are set up for the loop, patterns in what gets done in the loop proper, and patterns in what gets done after the loop. The <code><b>LOOP</b></code> language captures these patterns so you can express them directly.
+        </p>
+        <p>
+            The <code><b>LOOP</b></code> macro has a lot of parts--one of the main complaints of <code><b>LOOP</b></code>'s detractors is that it's too complex. In this chapter, I'll tackle <code><b>LOOP</b></code> head on, giving you a systematic tour of the various parts and how they fit together.
+        </p>
+        <h2>
+            <a name="the-parts-of-a-loop" id="the-parts-of-a-loop">The Parts of a LOOP</a>
+        </h2>
+        <p>
+            You can do the following in a <code><b>LOOP</b></code>:
+        </p>
+        <ul>
+            <li>Step variables numerically and over various data structures
+            </li>
+            <li>Collect, count, sum, minimize, and maximize values seen while looping
+            </li>
+            <li>Execute arbitrary Lisp expressions
+            </li>
+            <li>Decide when to terminate the loop
+            </li>
+            <li>Conditionally do any of these
+            </li>
+        </ul>
+        <p>
+            Additionally, <code><b>LOOP</b></code> provides syntax for the following:
+        </p>
+        <ul>
+            <li>Creating local variables for use within the loop
+            </li>
+            <li>Specifying arbitrary Lisp expressions to run before and after the loop proper
+            </li>
+        </ul>
+        <p>
+            The basic structure of a <code><b>LOOP</b></code> is a set of clauses, each of which begins with a <i>loop keyword</i>.<sup>1</sup> How each clause is parsed by the <code><b>LOOP</b></code> macro depends on the keyword. Some of the main keywords, which you saw in Chapter 7, are <code>for</code>, <code>collecting</code>, <code>summing</code>, <code>counting</code>, <code>do</code>, and <code>finally</code>.
+        </p>
+        <h2>
+            <a name="iteration-control" id="iteration-control">Iteration Control</a>
+        </h2>
+        <p>
+            Most of the so-called iteration control clauses start with the loop keyword <code>for</code>, or its synonym <code>as</code>,<sup>2</sup> followed by the name of a variable. What follows after the variable name depends on the type of <code>for</code> clause.
+        </p>
+        <p>
+            The subclauses of a <code>for</code> clause can iterate over the following:
+        </p>
+        <ul>
+            <li>Ranges of numbers, up or down, by specified intervals
+            </li>
+            <li>The individual items of a list
+            </li>
+            <li>The cons cells that make up a list
+            </li>
+            <li>The elements of a vector, including subtypes such as strings and bit vectors
+            </li>
+            <li>The pairs of a hash table
+            </li>
+            <li>The symbols in a package
+            </li>
+            <li>The results of repeatedly evaluating a given form
+            </li>
+        </ul>
+        <p>
+            A single loop can have multiple <code>for</code> clauses with each clause naming its own variable. When a loop has multiple <code>for</code> clauses, the loop terminates as soon as any <code>for</code> clause reaches its end condition. For instance, the following loop:
+        </p>
+        <pre>
+(loop
+  for item in list
+  for i from 1 to 10
+  do (something))
+</pre>
+        <p>
+            will iterate at most ten times but may stop sooner if <code>list</code> contains fewer than ten items.
+        </p>
+        <h2>
+            <a name="counting-loops" id="counting-loops">Counting Loops</a>
+        </h2>
+        <p>
+            Arithmetic iteration clauses control the number of times the loop body will be executed by stepping a variable over a range of numbers, executing the body once per step. These clauses consist of from one to three of the following <i>prepositional phrases</i> after the <code>for</code> (or <code>as</code>): the <i>from where</i> phrase, the <i>to where</i> phrase, and the <i>by how much</i> phrase.
+        </p>
+        <p>
+            The <i>from where</i> phrase specifies the initial value of the clause's variable. It consists of one of the prepositions <code>from</code>, <code>downfrom</code>, or <code>upfrom</code> followed by a form, which supplies the initial value (a number).
+        </p>
+        <p>
+            The <i>to where</i> phrase specifies a stopping point for the loop and consists of one of the prepositions <code>to</code>, <code>upto</code>, <code>below</code>, <code>downto</code>, or <code>above</code> followed by a form, which supplies the stopping point. With <code>upto</code> and <code>downto</code>, the loop body will be terminated (without executing the body again) when the variable passes the stopping point; with <code>below</code> and <code>above</code>, it stops one iteration earlier.The <i>by how much</i> phrase consists of the prepositions <code>by</code> and a form, which must evaluate to a positive number. The variable will be stepped (up or down, as determined by the other phrases) by this amount on each iteration or by one if it's omitted.
+        </p>
+        <p>
+            You must specify at least one of these prepositional phrases. The defaults are to start at zero, increment the variable by one at each iteration, and go forever or, more likely, until some other clause terminates the loop. You can modify any or all of these defaults by adding the appropriate prepositional phrases. The only wrinkle is that if you want decremental stepping, there's no default <i>from where</i> value, so you must specify one with either <code>from</code> or <code>downfrom</code>. So, the following:
+        </p>
+        <pre>
+(loop for i upto 10 collect i)
+</pre>
+        <p>
+            collects the first eleven integers (zero to ten), but the behavior of this:
+        </p>
+        <pre>
+(loop for i downto -10 collect i)         ; wrong
+</pre>
+        <p>
+            is undefined. Instead, you need to write this:
+        </p>
+        <pre>
+(loop for i from 0 downto -10 collect i)
+</pre>
+        <p>
+            Also note that because <code><b>LOOP</b></code> is a macro, which runs at compile time, it has to be able to determine the direction to step the variable based solely on the prepositions--not the values of the forms, which may not be known until runtime. So, the following:
+        </p>
+        <pre>
+(loop for i from 10 to 20 ...) 
+</pre>
+        <p>
+            works fine since the default is incremental stepping. But this:
+        </p>
+        <pre>
+(loop for i from 20 to 10 ...) 
+</pre>
+        <p>
+            won't know to count down from twenty to ten. Worse yet, it won't give you an error--it will just not execute the loop since <code>i</code> is already greater than ten. Instead, you must write this:
+        </p>
+        <pre>
+(loop for i from 20 downto 10 ...)
+</pre>
+        <p>
+            or this:
+        </p>
+        <pre>
+(loop for i downfrom 20 to 10 ...)
+</pre>
+        <p>
+            Finally, if you just want a loop that repeats a certain number of times, you can replace a clause of the following form:
+        </p>
+        <pre>
+for i from 1 to <i>number-form</i>
+</pre>
+        <p>
+            with a <code>repeat</code> clause like this:
+        </p>
+        <pre>
+repeat <i>number-form</i>
+</pre>
+        <p>
+            These clauses are identical in effect except the <code>repeat</code> clause doesn't create an explicit loop variable.
+        </p>
+        <h2>
+            <a name="looping-over-collections-and-packages" id="looping-over-collections-and-packages">Looping Over Collections and Packages</a>
+        </h2>
+        <p>
+            The <code>for</code> clauses for iterating over lists are much simpler than the arithmetic clauses. They support only two prepositional phrases, <code>in</code> and <code>on</code>.
+        </p>
+        <p>
+            A phrase of this form:
+        </p>
+        <pre>
+for <i>var</i> in <i>list-form</i>
+</pre>
+        <p>
+            steps <i>var</i> over all the elements of the list produced by evaluating <i>list-form</i>.
+        </p>
+        <pre>
+(loop for i in (list 10 20 30 40) collect i) ==&gt; (10 20 30 40)
+</pre>
+        <p>
+            Occasionally this clause is supplemented with a <code>by</code> phrase, which specifies a function to use to move down the list. The default is <code><b>CDR</b></code> but can be any function that takes a list and returns a sublist. For instance, you could collect every other element of a list with a loop like this:
+        </p>
+        <pre>
+(loop for i in (list 10 20 30 40) by #'cddr collect i) ==&gt; (10 30)
+</pre>
+        <p>
+            An <code>on</code> prepositional phrase is used to step <i>var</i> over the cons cells that make up a list.
+        </p>
+        <pre>
+(loop for x on (list 10 20 30) collect x) ==&gt; ((10 20 30) (20 30) (30))
+</pre>
+        <p>
+            This phrase too can take a <code>by</code> preposition:
+        </p>
+        <pre>
+(loop for x on (list 10 20 30 40) by #'cddr collect x) ==&gt; ((10 20 30 40) (30 40))
+</pre>
+        <p>
+            Looping over the elements of a vector (which includes strings and bit vectors) is similar to looping over the elements of a list except the preposition <code>across</code> is used instead of <code>in</code>.<sup>3</sup> For instance:
+        </p>
+        <pre>
+(loop for x across "abcd" collect x) ==&gt; (#\a #\b #\c #\d)
+</pre>
+        <p>
+            Iterating over a hash table or package is slightly more complicated because hash tables and packages have different sets of values you might want to iterate over--the keys or values in a hash table and the different kinds of symbols in a package. Both kinds of iteration follow the same pattern. The basic pattern looks like this:
+        </p>
+        <pre>
+(loop for <i>var</i> being the <i>things</i> in <i>hash-or-package</i> ...)
+</pre>
+        <p>
+            For hash tables, the possible values for <i>things</i> are <code>hash-keys</code> and <code>hash-values</code>, which cause <code>var</code> to be bound to successive values of either the keys or the values of the hash table. The <i>hash-or-package</i> form is evaluated once to produce a value, which must be a hash table.
+        </p>
+        <p>
+            To iterate over a package, <i>things</i> can be <code>symbols</code>, <code>present-symbols</code>, and <code>external-symbols</code>, which cause <i>var</i> to be bound to each of the symbols accessible in a package, each of the symbols present in a package (in other words, interned or imported into that package), or each of the symbols that have been exported from the package. The <i>hash-or-package</i> form is evaluated to produce the name of a package, which is looked up as if by <code><b>FIND-PACKAGE</b></code> or a package object. Synonyms are also available for parts of the <code>for</code> clause. In place of <code>the</code>, you can use <code>each</code>; you can use <code>of</code> instead of <code>in</code>; and you can write the <i>things</i> in the singular (for example, <code>hash-key</code> or <code>symbol</code>).
+        </p>
+        <p>
+            Finally, since you'll often want both the keys and the values when iterating over a hash table, the hash table clauses support a <code>using</code> subclause at the end of the hash table clause.
+        </p>
+        <pre>
+(loop for k being the hash-keys in h using (hash-value v) ...)
+(loop for v being the hash-values in h using (hash-key k) ...)
+</pre>
+        <p>
+            Both of these loops will bind <code>k</code> to each key in the hash table and <code>v</code> to the corresponding value. Note that the first element of the <code>using</code> subclause must be in the singular form.<sup>4</sup>
+        </p>
+        <h2>
+            <a name="equals-then-iteration" id="equals-then-iteration">Equals-Then Iteration</a>
+        </h2>
+        <p>
+            If none of the other <code>for</code> clauses supports exactly the form of variable stepping you need, you can take complete control over stepping with an <i>equals-then</i> clause. This clause is similar to the binding clauses in a <code><b>DO</b></code> loop but cast in a more Algolish syntax. The template is as follows:
+        </p>
+        <pre>
+(loop for <i>var</i> = <i>initial-value-form</i> [ then <i>step-form</i> ] ...)
+</pre>
+        <p>
+            As usual, <i>var</i> is the name of the variable to be stepped. Its initial value is obtained by evaluating <i>initial-value-form</i> once before the first iteration. In each subsequent iteration, <i>step-form</i> is evaluated, and its value becomes the new value of <i>var</i>. With no <code>then</code> part to the clause, the <i>initial-value-form</i> is reevaluated on each iteration to provide the new value. Note that this is different from a <code><b>DO</b></code> binding clause with no step form.
+        </p>
+        <p>
+            The <i>step-form</i> can refer to other loop variables, including variables created by other <code>for</code> clauses later in the loop. For instance:
+        </p>
+        <pre>
+(loop repeat 5 
+      for x = 0 then y
+      for y = 1 then (+ x y)
+      collect y) ==&gt; (1 2 4 8 16)
+</pre>
+        <p>
+            However, note that each <code>for</code> clause is evaluated separately in the order it appears. So in the previous loop, on the second iteration <code>x</code> is set to the value of <code>y</code> before <code>y</code> changes (in other words, <code>1</code>). But <code>y</code> is then set to the sum of its old value (still <code>1</code>) and the new value of <code>x</code>. If the order of the <code>for</code> clauses is reversed, the results change.
+        </p>
+        <pre>
+(loop repeat 5
+      for y = 1 then (+ x y)
+      for x = 0 then y
+      collect y) ==&gt; (1 1 2 4 8)
+</pre>
+        <p>
+            Often, however, you'll want the step forms for multiple variables to be evaluated before any of the variables is given its new value (similar to how <code><b>DO</b></code> steps its variables). In that case, you can join multiple <code>for</code> clauses by replacing all but the first <code>for</code> with <code>and</code>. You saw this formulation already in the <code><b>LOOP</b></code> version of the Fibonacci computation in Chapter 7. Here's another variant, based on the two previous examples:
+        </p>
+        <pre>
+(loop repeat 5 
+      for x = 0 then y
+      and y = 1 then (+ x y)
+      collect y) ==&gt; (1 1 2 3 5)
+</pre>
+        <h2>
+            <a name="local-variables" id="local-variables">Local Variables</a>
+        </h2>
+        <p>
+            While the main variables needed within a loop are usually declared implicitly in <code>for</code> clauses, sometimes you'll need auxiliary variables, which you can declare with <code>with</code> clauses.
+        </p>
+        <pre>
+with <i>var</i> [ = <i>value-form</i> ]
+</pre>
+        <p>
+            The name <i>var</i> becomes the name of a local variable that will cease to exist when the loop finishes. If the <code>with</code> clause contains an <code>=</code> <code>value-form</code> part, the variable will be initialized, before the first iteration of the loop, to the value of <i>value-form</i>.
+        </p>
+        <p>
+            Multiple <code>with</code> clauses can appear in a loop; each clause is evaluated independently in the order it appears and the value is assigned before proceeding to the next clause, allowing later variables to depend on the value of already declared variables. Mutually independent variables can be declared in one <code>with</code> clause with an <code>and</code> between each declaration.
+        </p>
+        <h2>
+            <a name="destructuring-variables" id="destructuring-variables">Destructuring Variables</a>
+        </h2>
+        <p>
+            One handy feature of <code><b>LOOP</b></code> I haven't mentioned yet is the ability to destructure list values assigned to loop variables. This lets you take apart the value of lists that would otherwise be assigned to a loop variable, similar to the way <code><b>DESTRUCTURING-BIND</b></code> works but a bit less elaborate. Basically, you can replace any loop variable in a <code>for</code> or <code>with</code> clause with a tree of symbols, and the list value that would have been assigned to the simple variable will instead be destructured into variables named by the symbols in the tree. A simple example looks like this:
+        </p>
+        <pre>
+CL-USER&gt; (loop for (a b) in '((1 2) (3 4) (5 6))
+            do (format t "a: ~a; b: ~a~%" a b))
+a: 1; b: 2
+a: 3; b: 4
+a: 5; b: 6
+NIL
+</pre>
+        <p>
+            The tree can also include dotted lists, in which case the name after the dot acts like a <code><b>&amp;rest</b></code> parameter, being bound to a list containing any remaining elements of the list. This is particularly handy with <code>for</code>/<code>on</code> loops since the value is always a list. For instance, this <code><b>LOOP</b></code> (which I used in Chapter 18 to emit a comma-delimited list):
+        </p>
+        <pre>
+(loop for cons on list
+    do (format t "~a" (car cons))
+    when (cdr cons) do (format t ", "))
+</pre>
+        <p>
+            could also be written like this:
+        </p>
+        <pre>
+(loop for (item . rest) on list
+    do (format t "~a" item)
+    when rest do (format t ", "))
+</pre>
+        <p>
+            If you want to ignore a value in the destructured list, you can use <code><b>NIL</b></code> in place of a variable name.
+        </p>
+        <pre>
+(loop for (a nil) in '((1 2) (3 4) (5 6)) collect a) ==&gt; (1 3 5)
+</pre>
+        <p>
+            If the destructuring list contains more variables than there are values in the list, the extra variables are set to <code><b>NIL</b></code>, making all the variables essentially like <code><b>&amp;optional</b></code> parameters. There isn't, however, any equivalent to <code><b>&amp;key</b></code> parameters.
+        </p>
+        <h2>
+            <a name="value-accumulation" id="value-accumulation">Value Accumulation</a>
+        </h2>
+        <p>
+            The value accumulation clauses are perhaps the most powerful part of <code><b>LOOP</b></code>. While the iteration control clauses provide a concise syntax for expressing the basic mechanics of looping, they aren't dramatically different from the equivalent mechanisms provided by <code><b>DO</b></code>, <code><b>DOLIST</b></code>, and <code><b>DOTIMES</b></code>.
+        </p>
+        <p>
+            The value accumulation clauses, on the other hand, provide a concise notation for a handful of common loop idioms having to do with accumulating values while looping. Each accumulation clause starts with a verb and follows this pattern:
+        </p>
+        <pre>
+<i>verb</i> <i>form</i> [ into <i>var</i> ]
+</pre>
+        <p>
+            Each time through the loop, an accumulation clause evaluates <i>form</i> and saves the value in a manner determined by the <i>verb</i>. With an <code>into</code> subclause, the value is saved into the variable named by <i>var</i>. The variable is local to the loop, as if it'd been declared in a <code>with</code> clause. With no <code>into</code> subclause, the accumulation clause instead accumulates a default value for the whole loop expression.
+        </p>
+        <p>
+            The possible verbs are <code>collect</code>, <code>append</code>, <code>nconc</code>, <code>count</code>, <code>sum</code>, <code>maximize</code>, and <code>minimize</code>. Also available as synonyms are the present participle forms: <code>collecting</code>, <code>appending</code>, <code>nconcing</code>, <code>counting</code>, <code>summing</code>, <code>maximizing</code>, and <code>minimizing</code>.
+        </p>
+        <p>
+            A <code>collect</code> clause builds up a list containing all the values of <i>form</i> in the order they're seen. This is a particularly useful construct because the code you'd have to write to collect a list in order as efficiently as <code><b>LOOP</b></code> does is more painful than you'd normally write by hand.<sup>5</sup> Related to <code>collect</code> are the verbs <code>append</code> and <code>nconc</code>. These verbs also accumulate values into a list, but they join the values, which must be lists, into a single list as if by the functions <code><b>APPEND</b></code> or <code><b>NCONC</b></code>. <sup>6</sup>
+        </p>
+        <p>
+            The remaining accumulation clauses are used to accumulate numeric values. The verb <code>count</code> counts the number of times <i>form</i> is true, <code>sum</code> collects a running total of the values of <i>form</i>, <code>maximize</code> collects the largest value seen for <i>form</i>, and <code>minimize</code> collects the smallest. For instance, suppose you define a variable <code>*random*</code> that contains a list of random numbers.
+        </p>
+        <pre>
+(defparameter *random* (loop repeat 100 collect (random 10000)))
+</pre>
+        <p>
+            Then the following loop will return a list containing various summary information about the numbers:
+        </p>
+        <pre>
+(loop for i in *random*
+   counting (evenp i) into evens
+   counting (oddp i) into odds
+   summing i into total
+   maximizing i into max
+   minimizing i into min
+   finally (return (list min max total evens odds)))
+</pre>
+        <h2>
+            <a name="unconditional-execution" id="unconditional-execution">Unconditional Execution</a>
+        </h2>
+        <p>
+            As useful as the value accumulation constructs are, <code><b>LOOP</b></code> wouldn't be a very good general-purpose iteration facility if there wasn't a way to execute arbitrary Lisp code in the loop body.
+        </p>
+        <p>
+            The simplest way to execute arbitrary code within a loop body is with a <code>do</code> clause. Compared to the clauses I've described so far, with their prepositions and subclauses, <code>do</code> is a model of Yodaesque simplicity.<sup>7</sup> A <code>do</code> clause consists of the word <code>do</code> (or <code>doing</code>) followed by one or more Lisp forms that are all evaluated when the <code>do</code> clause is. The <code>do</code> clause ends at the closing parenthesis of the loop or the next loop keyword.
+        </p>
+        <p>
+            For instance, to print the numbers from one to ten, you could write this:
+        </p>
+        <pre>
+(loop for i from 1 to 10 do (print i))
+</pre>
+        <p>
+            Another, more dramatic, form of immediate execution is a <code>return</code> clause. This clause consists of the word <code>return</code> followed by a single Lisp form, which is evaluated, with the resulting value immediately returned as the value of the loop.
+        </p>
+        <p>
+            You can also break out of a loop in a <code>do</code> clause using any of Lisp's normal control flow operators, such as <code><b>RETURN</b></code> and <code><b>RETURN-FROM</b></code>. Note that a <code>return</code> clause always returns from the immediately enclosing <code><b>LOOP</b></code> expression, while a <code><b>RETURN</b></code> or <code><b>RETURN-FROM</b></code> in a <code>do</code> clause can return from any enclosing expression. For instance, compare the following:
+        </p>
+        <pre>
+(block outer
+  (loop for i from 0 return 100) ; 100 returned from LOOP
+  (print "This will print")
+  200) ==&gt; 200
+</pre>
+        <p>
+            to this:
+        </p>
+        <pre>
+(block outer
+  (loop for i from 0 do (return-from outer 100)) ; 100 returned from BLOCK
+  (print "This won't print")
+  200) ==&gt; 100
+</pre>
+        <p>
+            The <code>do</code> and <code>return</code> clauses are collectively called the <i>unconditional execution</i> clauses.
+        </p>
+        <h2>
+            <a name="conditional-execution" id="conditional-execution">Conditional Execution</a>
+        </h2>
+        <p>
+            Because a <code>do</code> clause can contain arbitrary Lisp forms, you can use any Lisp expressions you want, including control constructs such as <code><b>IF</b></code> and <code><b>WHEN</b></code>. So, the following is one way to write a loop that prints only the even numbers between one and ten:
+        </p>
+        <pre>
+(loop for i from 1 to 10 do (when (evenp i) (print i)))
+</pre>
+        <p>
+            However, sometimes you'll want conditional control at the level of loop clauses. For instance, suppose you wanted to sum only the even numbers between one and ten using a <code>summing</code> clause. You couldn't write such a loop with a <code>do</code> clause because there'd be no way to "call" the <code>sum i</code> in the middle of a regular Lisp form. In cases like this, you need to use one of <code><b>LOOP</b></code>'s own conditional expressions like this:
+        </p>
+        <pre>
+(loop for i from 1 to 10 when (evenp i) sum i) ==&gt; 30
+</pre>
+        <p>
+            <code><b>LOOP</b></code> provides three conditional constructs, and they all follow this basic pattern:
+        </p>
+        <pre>
+<i>conditional</i> <i>test-form</i> <i>loop-clause</i>
+</pre>
+        <p>
+            The <i>conditional</i> can be <code>if</code>, <code>when</code>, or <code>unless</code>. The <i>test-form</i> is any regular Lisp form, and <i>loop-clause</i> can be a value accumulation clause (<code>count</code><i>,</i> <code>collect</code><i>, and so on), an unconditional execution</i> clause, or another conditional execution clause. Multiple loop clauses can be attached to a single conditional by joining them with <code>and</code>.
+        </p>
+        <p>
+            As an extra bit of syntactic sugar, within the first loop clause, after the test form, you can use the variable <code>it</code> to refer to the value returned by the test form. For instance, the following loop collects the non-<code><b>NIL</b></code> values found in <code>some-hash</code> when looking up the keys in <code>some-list</code>:
+        </p>
+        <pre>
+(loop for key in some-list when (gethash key some-hash) collect it)
+</pre>
+        <p>
+            A conditional clause is executed each time through the loop. An <code>if</code> or <code>when</code> clause executes its <i>loop-clause</i> if <i>test-form</i> evaluates to true. An <code>unless</code> reverses the test, executing <i>loop-clause</i> only when <i>test-form</i> is <code><b>NIL</b></code>. Unlike their Common Lisp namesakes, <code><b>LOOP</b></code>'s <code>if</code> and <code>when</code> are merely synonyms--there's no difference in their behavior.
+        </p>
+        <p>
+            All three conditional clauses can also take an <code>else</code> branch, which is followed by another loop clause or multiple clauses joined by <code>and</code>. When conditional clauses are nested, the set of clauses connected to an inner conditional clause can be closed with the word <code>end</code>. The <code>end</code> is optional when not needed to disambiguate a nested conditional--the end of a conditional clause will be inferred from the end of the loop or the start of another clause not joined by <code>and</code>.
+        </p>
+        <p>
+            The following rather silly loop demonstrates the various forms of <code><b>LOOP</b></code> conditionals. The <code>update-analysis</code> function will be called each time through the loop with the latest values of the various variables accumulated by the clauses within the conditionals.
+        </p>
+        <pre>
+(loop for i from 1 to 100
+      if (evenp i)
+        minimize i into min-even and 
+        maximize i into max-even and
+        unless (zerop (mod i 4))
+          sum i into even-not-fours-total
+        end
+        and sum i into even-total
+      else
+        minimize i into min-odd and
+        maximize i into max-odd and
+        when (zerop (mod i 5)) 
+          sum i into fives-total
+        end
+        and sum i into odd-total
+      do (update-analysis min-even
+                          max-even
+                          min-odd
+                          max-odd
+                          even-total
+                          odd-total
+                          fives-total
+                          even-not-fours-total))
+</pre>
+        <h2>
+            <a name="setting-up-and-tearing-down" id="setting-up-and-tearing-down">Setting Up and Tearing Down</a>
+        </h2>
+        <p>
+            One of the key insights the designers of the <code><b>LOOP</b></code> language had about actual loops "in the wild" is that the loop proper is often preceded by a bit of code to set things up and then followed by some more code that does something with the values computed by the loop. A trivial example, in Perl,<sup>8</sup> might look like this:
+        </p>
+        <pre>
+my $evens_sum = 0;
+my $odds_sum  = 0;
+foreach my $i (@list_of_numbers) {
+  if ($i % 2) {
+    $odds_sum += $i;
+  } else {
+    $evens_sum += $i;
+  }
+}
+if ($evens_sum &gt; $odds_sum) {
+  print "Sum of evens greater\n";
+} else {
+  print "Sum of odds greater\n";
+}
+</pre>
+        <p>
+            The loop proper in this code is the <code>foreach</code> statement. But the <code>foreach</code> loop doesn't stand on its own: the code in the loop body refers to variables declared in the two lines before the loop.<sup>9</sup> And the work the loop does is all for naught without the <code>if</code> statement after the loop that actually reports the results. In Common Lisp, of course, the <code><b>LOOP</b></code> construct is an expression that returns a value, so there's even more often a need to do something after the loop proper, namely, generate the return value.
+        </p>
+        <p>
+            So, said the <code><b>LOOP</b></code> designers, let's give a way to include the code that's really part of the loop in the loop itself. Thus, <code><b>LOOP</b></code> provides two keywords, <code>initially</code> and <code>finally</code>, that introduce code to be run outside the loop's main body.
+        </p>
+        <p>
+            After the <code>initially</code> or <code>finally</code>, these clauses consist of all the Lisp forms up to the start of the next loop clause or the end of the loop. All the <code>initially</code> forms are combined into a single <i>prologue</i>, which runs once, immediately after all the local loop variables are initialized and before the body of the loop. The <code>finally</code> forms are similarly combined into a <i>epilogue</i> to be run after the last iteration of the loop body. Both the prologue and epilogue code can refer to local loop variables.
+        </p>
+        <p>
+            The prologue is always run, even if the loop body iterates zero times. The loop can return without running the epilogue if any of the following happens:
+        </p>
+        <ul>
+            <li>A <code>return</code> clause executes.
+            </li>
+            <li>
+                <code><b>RETURN</b></code> , <code><b>RETURN-FROM</b></code>, or another transfer of control construct is called from within a Lisp form within the body.<sup>10</sup>
+            </li>
+            <li>The loop is terminated by an <code>always</code>, <code>never</code>, or <code>thereis</code> clause, as I'll discuss in the next section.
+            </li>
+        </ul>
+        <p>
+            Within the epilogue code, <code><b>RETURN</b></code> or <code><b>RETURN-FROM</b></code> can be used to explicitly provide a return value for the loop. Such an explicit return value will take precedence over any value that might otherwise be provided by an accumulation or termination test clause.
+        </p>
+        <p>
+            To allow <code><b>RETURN-FROM</b></code> to be used to return from a specific loop (useful when nesting <code><b>LOOP</b></code> expressions), you can name a <code><b>LOOP</b></code> with the loop keyword <code>named</code>. If a <code>named</code> clause appears in a loop, it must be the first clause. For a simple example, assume <code>lists</code> is a list of lists and you want to find an item that matches some criteria in one of those nested lists. You could find it with a pair of nested loops like this:
+        </p>
+        <pre>
+(loop named outer for list in lists do
+     (loop for item in list do
+          (if (what-i-am-looking-for-p item)
+            (return-from outer item))))
+</pre>
+        <h2>
+            <a name="termination-tests" id="termination-tests">Termination Tests</a>
+        </h2>
+        <p>
+            While the <code>for</code> and <code>repeat</code> clauses provide the basic infrastructure for controlling the number of iterations, sometimes you'll need to break out of a loop early. You've already seen how a <code>return</code> clause or a <code><b>RETURN</b></code> or <code><b>RETURN-FROM</b></code> within a <code>do</code> clause can immediately terminate the loop; but just as there are common patterns for accumulating values, there are also common patterns for deciding when it's time to bail on a loop. These patterns are supported in <code><b>LOOP</b></code> by the termination clauses, <code>while</code>, <code>until</code>, <code>always</code>, <code>never</code>, and <code>thereis</code>. They all follow the same pattern.
+        </p>
+        <pre>
+<i>loop-keyword</i> <i>test-form</i>
+</pre>
+        <p>
+            All five evaluate <i>test-form</i> each time through the iteration and decide, based on the resulting value, whether to terminate the loop. They differ in what happens after they terminate the loop--if they do--and how they decide.
+        </p>
+        <p>
+            The loop keywords <code>while</code> and <code>until</code> introduce the "mild" termination clauses. When they decide to terminate the loop, control passes to the epilogue, skipping the rest of the loop body. The epilogue can then return a value or do whatever it wants to finish the loop. A <code>while</code> clause terminates the loop the first time the test form is false; <code>until</code>, conversely, stops it the first time the test form is true.
+        </p>
+        <p>
+            Another form of mild termination is provided by the <code><b>LOOP-FINISH</b></code> macro. This is a regular Lisp form, not a loop clause, so it can be used anywhere within the Lisp forms of a <code>do</code> clause. It also causes an immediate jump to the loop epilogue. It can be useful when the decision to break out of the loop can't be easily condensed into a single form that can be used with a <code>while</code> or <code>until</code> clause.
+        </p>
+        <p>
+            The other three clauses--<code>always</code>, <code>never</code>, and <code>thereis</code>--terminate the loop with extreme prejudice; they immediately return from the loop, skipping not only any subsequent loop clauses but also the epilogue. They also provide a default value for the loop even when they don't cause the loop to terminate. However, if the loop is <i>not</i> terminated by one of these termination tests, the epilogue is run and can return a value other than the default provided by the termination clauses.
+        </p>
+        <p>
+            Because these clauses provide their own return values, they can't be combined with accumulation clauses unless the accumulation clause has an <code>into</code> subclause. The compiler (or interpreter) should signal an error at compile time if they are.The <code>always</code> and <code>never</code> clauses return only boolean values, so they're most useful when you need to use a loop expression as part of a predicate. You can use <code>always</code> to check that the test form is true on every iteration of the loop. Conversely, <code>never</code> tests that the test form evaluates to <code><b>NIL</b></code> on every iteration. If the test form fails (returning <code><b>NIL</b></code> in an <code>always</code> clause or non-<code><b>NIL</b></code> in a <code>never</code> clause), the loop is immediately terminated, returning <code><b>NIL</b></code>. If the loop runs to completion, the default value of <code><b>T</b></code> is provided.
+        </p>
+        <p>
+            For instance, if you want to test that all the numbers in a list, <code>numbers</code>, are even, you can write this:
+        </p>
+        <pre>
+(if (loop for n in numbers always (evenp n))
+    (print "All numbers even."))
+</pre>
+        <p>
+            Equivalently you could write the following:
+        </p>
+        <pre>
+(if (loop for n in numbers never (oddp n))
+    (print "All numbers even."))
+</pre>
+        <p>
+            A <code>thereis</code> clause is used to test whether the test form is <i>ever</i> true. As soon as the test form returns a non-<code><b>NIL</b></code> value, the loop is terminated, returning that value. If the loop runs to completion, the <code>thereis</code> clause provides a default return value of <code><b>NIL</b></code>.
+        </p>
+        <pre>
+(loop for char across "abc123" thereis (digit-char-p char)) ==&gt; 1
+
+(loop for char across "abcdef" thereis (digit-char-p char)) ==&gt; NIL
+</pre>
+        <h2>
+            <a name="putting-it-all-together" id="putting-it-all-together">Putting It All Together</a>
+        </h2>
+        <p>
+            Now you've seen all the main features of the <code><b>LOOP</b></code> facility. You can combine any of the clauses I've discussed as long as you abide by the following rules:
+        </p>
+        <ul>
+            <li>The <code>named</code> clause, if any, must be the first clause.
+            </li>
+            <li>After the <code>named</code> clause come all the <code>initially</code>, <code>with</code>, <code>for</code>, and <code>repeat</code> clauses.
+            </li>
+            <li>Then comes the body clauses: conditional and unconditional execution, accumulation, and termination test.<sup>11</sup>
+            </li>
+            <li>End with any <code>finally</code> clauses.
+            </li>
+        </ul>
+        <p>
+            The <code><b>LOOP</b></code> macro will expand into code that performs the following actions:
+        </p>
+        <ul>
+            <li>Initializes all local loop variables as declared with <code>with</code> or <code>for</code> clauses as well as those implicitly created by accumulation clauses. The initial value forms are evaluated in the order the clauses appear in the loop.
+            </li>
+            <li>Execute the forms provided by any <code>initially</code> clauses--the prologue--in the order they appear in the loop.
+            </li>
+            <li>Iterate, executing the body of the loop as described in the next paragraph.
+            </li>
+            <li>Execute the forms provided by any <code>finally</code> clauses--the epilogue--in the order they appear in the loop.
+            </li>
+        </ul>
+        <p>
+            While the loop is iterating, the body is executed by first stepping any iteration control variables and then executing any conditional or unconditional execution, accumulation, or termination test clauses in the order they appear in the loop code. If any of the clauses in the loop body terminate the loop, the rest of the body is skipped and the loop returns, possibly after running the epilogue.
+        </p>
+        <p>
+            And that's pretty much all there is to it.<sup>12</sup> You'll use <code><b>LOOP</b></code> fairly often in the code later in this book, so it's worth having some knowledge of it. Beyond that, it's up to you how much you use it.
+        </p>
+        <p>
+            And with that, you're ready to dive into the practical chapters that make up the rest of the book--up first, writing a spam filter.
+        </p>
+        <hr>
+        <div class="notes">
+            <p>
+                <sup>1</sup>The term <i>loop keyword</i> is a bit unfortunate, as loop keywords aren't keywords in the normal sense of being symbols in the <code>KEYWORD</code> package. In fact, any symbol, from any package, with the appropriate name will do; the <code><b>LOOP</b></code> macro cares only about their names. Typically, though, they're written with no package qualifier and are thus read (and interned as necessary) in the current package.
+            </p>
+            <p>
+                <sup>2</sup>Because one of the goals of <code><b>LOOP</b></code> is to allow loop expressions to be written with a quasi-English syntax, many of the keywords have synonyms that are treated the same by <code><b>LOOP</b></code> but allow some freedom to express things in slightly more idiomatic English for different contexts.
+            </p>
+            <p>
+                <sup>3</sup>You may wonder why <code><b>LOOP</b></code> can't figure out whether it's looping over a list or a vector without needing different prepositions. This is another consequence of <code><b>LOOP</b></code> being a macro: the value of the list or vector won't be known until runtime, but <code><b>LOOP</b></code>, as a macro, has to generate code at compile time. And <code><b>LOOP</b></code>'s designers wanted it to generate extremely efficient code. To be able to generate efficient code for looping across, say, a vector, it needs to know at compile time that the value will be a vector at runtime--thus, the different prepositions are needed.
+            </p>
+            <p>
+                <sup>4</sup>Don't ask me why <code><b>LOOP</b></code>'s authors chickened out on the no-parentheses style for the <code><b>using</b></code> subclause.
+            </p>
+            <p>
+                <sup>5</sup>The trick is to keep ahold of the tail of the list and add new cons cells by <code><b>SETF</b></code>ing the <code><b>CDR</b></code> of the tail. A handwritten equivalent of the code generated by <code>(loop for i upto 10 collect i)</code> would look like this:
+            </p>
+            <pre>
+(do ((list nil) (tail nil) (i 0 (1+ i)))
+    ((&gt; i 10) list)
+  (let ((new (cons i nil)))
+    (if (null list)
+        (setf list new)
+        (setf (cdr tail) new))
+    (setf tail new)))
+</pre>
+            <p>
+                Of course you'll rarely, if ever, write code like that. You'll use either <code><b>LOOP</b></code> or (if, for some reason, you don't want to use <code><b>LOOP</b></code>) the standard <code><b>PUSH</b></code>/<code><b>NREVERSE</b></code> idiom for collecting values.
+            </p>
+            <p>
+                <sup>6</sup>Recall that <code><b>NCONC</b></code> is the destructive version of <code><b>APPEND</b></code>--it's safe to use an <code>nconc</code> clause only if the values you're collecting are fresh lists that don't share any structure with other lists. For instance, this is safe:
+            </p>
+            <pre>
+(loop for i upto 3 nconc (list i i)) ==&gt; (0 0 1 1 2 2 3 3)
+</pre>
+            <p>
+                But this will get you into trouble:
+            </p>
+            <pre>
+(loop for i on (list 1 2 3) nconc i) ==&gt; <i>undefined</i>
+</pre>
+            <p>
+                The later will most likely get into an infinite loop as the various parts of the list produced by (list 1 2 3) are destructively modified to point to each other. But even that's not guaranteed--the behavior is simply undefined.
+            </p>
+            <p>
+                <sup>7</sup>"No! Try not. Do . . . or do not. There is no try." -- Yoda, <i>The Empire Strikes Back</i>
+            </p>
+            <p>
+                <sup>8</sup>I'm not picking on Perl here--this example would look pretty much the same in any language that bases its syntax on C's.
+            </p>
+            <p>
+                <sup>9</sup>Perl would let you get away with not declaring those variables if your program didn't <code>use strict</code>. But you should <i>always</i> <code>use strict</code> in Perl. The equivalent code in Python, Java, or C would always require the variables to be declared.
+            </p>
+            <p>
+                <sup>10</sup>You can cause a loop to finish normally, running the epilogue, from Lisp code executed as part of the loop body with the local macro <code><b>LOOP-FINISH</b></code>.
+            </p>
+            <p>
+                <sup>11</sup>Some Common Lisp implementations will let you get away with mixing body clauses and <code>for</code> clauses, but that's strictly undefined, and some implementations will reject such loops.
+            </p>
+            <p>
+                <sup>12</sup>The one aspect of <code><b>LOOP</b></code> I haven't touched on at all is the syntax for declaring the types of loop variables. Of course, I haven't discussed type declarations outside of <code><b>LOOP</b></code> either. I'll cover the general topic a bit in Chapter 32. For information on how they work with <code><b>LOOP</b></code>, consult your favorite Common Lisp reference.
+            </p>
+        </div>
+        <div class="copyright">
+            Copyright © 2003-2005, Peter Seibel
+        </div>
+    </body>
+</html>

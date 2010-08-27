@@ -1,0 +1,404 @@
+<HTML><HEAD><TITLE>Practical: A Shoutcast Server</TITLE><LINK REL="stylesheet" TYPE="text/css" HREF="style.css"/></HEAD><BODY><DIV CLASS="copyright">Copyright &copy; 2003-2005, Peter Seibel</DIV><H1>28. Practical: A Shoutcast Server</H1><P>In this chapter you'll develop another important part of what will
+eventually be a Web-based application for streaming MP3s, namely, the
+server that implements the Shoutcast protocol for actually streaming
+MP3s to clients such as iTunes, XMMS,<SUP>1</SUP> or Winamp.</P><A NAME="the-shoutcast-protocol"><H2>The Shoutcast Protocol</H2></A><P>The Shoutcast protocol was invented by the folks at Nullsoft, the
+makers of the Winamp MP3 software. It was designed to support
+Internet audio broadcasting--Shoutcast DJs send audio data from their
+personal computers to a central Shoutcast server that then turns
+around and streams it out to any connected listeners.</P><P>The server you'll build is actually only half a true Shoutcast
+server--you'll use the protocol that Shoutcast servers use to stream
+MP3s to listeners, but your server will be able to serve only songs
+already stored on the file system of the computer where the server is
+running.</P><P>You need to worry about only two parts of the Shoutcast protocol: the
+request that a client makes in order to start receiving a stream and
+the format of the response, including the mechanism by which metadata
+about what song is currently playing is embedded in the stream.</P><P>The initial request from the MP3 client to the Shoutcast server is
+formatted as a normal HTTP request. In response, the Shoutcast server
+sends an ICY response that looks like an HTTP response except with
+the string &quot;ICY&quot;<SUP>2</SUP> in place of the normal HTTP version string and with
+different headers. After sending the headers and a blank line, the
+server streams a potentially endless amount of MP3 data.</P><P>The only tricky thing about the Shoutcast protocol is the way
+metadata about the songs being streamed is embedded in the data sent
+to the client. The problem facing the Shoutcast designers was to
+provide a way for the Shoutcast server to communicate new title
+information to the client each time it started playing a new song so
+the client could display it in its UI. (Recall from Chapter 25 that
+the MP3 format doesn't make any provision for encoding metadata.)
+While one of the design goals of ID3v2 had been to make it better
+suited for use when streaming MP3s, the Nullsoft folks decided to go
+their own route and invent a new scheme that's fairly easy to
+implement on both the client side and the server side. That, of
+course, was ideal for them since they were also the authors of their
+own MP3 client.</P><P>Their scheme was to simply ignore the structure of MP3 data and embed
+a chunk of self-delimiting metadata every <I>n</I> bytes. The client
+would then be responsible for stripping out this metadata so it
+wasn't treated as MP3 data. Since metadata sent to a client that
+isn't ready for it will cause glitches in the sound, the server is
+supposed to send metadata only if the client's original request
+contains a special Icy-Metadata header. And in order for the client
+to know how often to expect metadata, the server must send back a
+header Icy-Metaint whose value is the number of bytes of MP3 data
+that will be sent between each chunk of metadata.</P><P>The basic content of the metadata is a string of the form
+&quot;StreamTitle='<I>title</I>';&quot; where <I>title</I> is the title of the
+current song and can't contain single quote marks. This payload is
+encoded as a length-delimited array of bytes: a single byte is sent
+indicating how many 16-byte blocks follow, and then that many blocks
+are sent. They contain the string payload as an ASCII string, with
+the final block padded out with null bytes as necessary.</P><P>Thus, the smallest legal metadata chunk is a single byte, zero,
+indicating zero subsequent blocks. If the server doesn't need to
+update the metadata, it can send such an empty chunk, but it must
+send at least the one byte so the client doesn't throw away actual
+MP3 data.</P><A NAME="song-sources"><H2>Song Sources</H2></A><P>Because a Shoutcast server has to keep streaming songs to the client
+for as long as it's connected, you need to provide your server with a
+source of songs to draw on. In the Web-based application, each
+connected client will have a playlist that can be manipulated via the
+Web interface. But in the interest of avoiding excessive coupling,
+you should define an interface that the Shoutcast server can use to
+obtain songs to play. You can write a simple implementation of this
+interface now and then a more complex one as part of the Web
+application you'll build in Chapter 29.</P><DIV CLASS="sidebarhead">The Package</DIV><DIV CLASS="sidebar"><P>The package for the code you'll develop in this chapter looks
+like this:</P><PRE>(defpackage :com.gigamonkeys.shoutcast
+  (:use :common-lisp 
+        :net.aserve 
+        :com.gigamonkeys.id3v2)
+  (:export :song
+           :file
+           :title
+           :id3-size
+           :find-song-source
+           :current-song
+           :still-current-p
+           :maybe-move-to-next-song
+           :*song-source-type*))</PRE></DIV><P>The idea behind the interface is that the Shoutcast server will find
+a source of songs based on an ID extracted from the AllegroServe
+request object. It can then do three things with the song source it's
+given.</P><UL><LI>Get the current song from the source</LI><LI>Tell the song source that it's done with the current song</LI><LI>Ask the source whether the song it was given earlier is still
+the current song</LI></UL><P>The last operation is necessary because there may be ways--and will be
+in Chapter 29--to manipulate the songs source outside the Shoutcast
+server. You can express the operations the Shoutcast server needs with
+the following generic functions:</P><PRE>(defgeneric current-song (source)
+  (:documentation &quot;Return the currently playing song or NIL.&quot;))
+
+(defgeneric maybe-move-to-next-song (song source)
+  (:documentation
+   &quot;If the given song is still the current one update the value
+returned by current-song.&quot;))
+
+(defgeneric still-current-p (song source)
+  (:documentation
+   &quot;Return true if the song given is the same as the current-song.&quot;))</PRE><P>The function <CODE>maybe-move-to-next-song</CODE> is defined the way it is
+so a single operation checks whether the song is current and, if it
+is, moves the song source to the next song. This will be important in
+the next chapter when you need to implement a song source that can be
+safely manipulated from two different threads.<SUP>3</SUP></P><P>To represent the information about a song that the Shoutcast server
+needs, you can define a class, <CODE>song</CODE>, with slots to hold the
+name of the MP3 file, the title to send in the Shoutcast metadata,
+and the size of the ID3 tag so you can skip it when serving up the
+file.</P><PRE>(defclass song ()
+  ((file     :reader file     :initarg :file)
+   (title    :reader title    :initarg :title)
+   (id3-size :reader id3-size :initarg :id3-size)))</PRE><P>The value returned by <CODE>current-song</CODE> (and thus the first
+argument to <CODE>still-current-p</CODE> and
+<CODE>maybe-move-to-next-song</CODE>) will be an instance of <CODE>song</CODE>.</P><P>In addition, you need to define a generic function that the server
+can use to find a song source based on the type of source desired and
+the request object. Methods will specialize the <CODE>type</CODE> parameter
+in order to return different kinds of song source and will pull
+whatever information they need from the request object to determine
+which source to return.</P><PRE>(defgeneric find-song-source (type request)
+  (:documentation &quot;Find the song-source of the given type for the given request.&quot;))</PRE><P>However, for the purposes of this chapter, you can use a trivial
+implementation of this interface that always uses the same object, a
+simple queue of song objects that you can manipulate from the REPL.
+You can start by defining a class, <CODE>simple-song-queue</CODE>, and a
+global variable, <CODE>*songs*</CODE>, that holds an instance of this
+class.</P><PRE>(defclass simple-song-queue ()
+  ((songs :accessor songs :initform (make-array 10 :adjustable t :fill-pointer 0))
+   (index :accessor index :initform 0)))
+
+(defparameter *songs* (make-instance 'simple-song-queue))</PRE><P>Then you can define a method on <CODE>find-song-source</CODE> that
+specializes <CODE>type</CODE> with an <CODE><B>EQL</B></CODE> specializer on the symbol
+<CODE>singleton</CODE> and returns the instance stored in <CODE>*songs*</CODE>.</P><PRE>(defmethod find-song-source ((type (eql 'singleton)) request)
+  (declare (ignore request))
+  *songs*)</PRE><P>Now you just need to implement methods on the three generic functions
+that the Shoutcast server will use.</P><PRE>(defmethod current-song ((source simple-song-queue))
+  (when (array-in-bounds-p (songs source) (index source))
+    (aref (songs source) (index source))))
+
+(defmethod still-current-p (song (source simple-song-queue))
+  (eql song (current-song source)))
+
+(defmethod maybe-move-to-next-song (song (source simple-song-queue))
+  (when (still-current-p song source)
+    (incf (index source))))</PRE><P>And for testing purposes you should provide a way to add songs to
+this queue.</P><PRE>(defun add-file-to-songs (file)
+  (vector-push-extend (file-&gt;song file) (songs *songs*)))
+
+(defun file-&gt;song (file)
+  (let ((id3 (read-id3 file)))
+    (make-instance 
+     'song
+     :file (namestring (truename file))
+     :title (format nil &quot;~a by ~a from ~a&quot; (song id3) (artist id3) (album id3))
+     :id3-size (size id3))))</PRE><A NAME="implementing-shoutcast"><H2>Implementing Shoutcast</H2></A><P>Now you're ready to implement the Shoutcast server. Since the
+Shoutcast protocol is loosely based on HTTP, you can implement the
+server as a function within AllegroServe. However, since you need to
+interact with some of the low-level features of AllegroServe, you
+can't use the <CODE>define-url-function</CODE> macro from Chapter 26.
+Instead, you need to write a regular function that looks like this:</P><PRE>(defun shoutcast (request entity)
+  (with-http-response
+      (request entity :content-type &quot;audio/MP3&quot; :timeout *timeout-seconds*)
+    (prepare-icy-response request *metadata-interval*)
+    (let ((wants-metadata-p (header-slot-value request :icy-metadata)))
+      (with-http-body (request entity)
+        (play-songs 
+         (request-socket request)
+         (find-song-source *song-source-type* request)
+         (if wants-metadata-p *metadata-interval*))))))</PRE><P>Then publish that function under the path <CODE>/stream.mp3</CODE> like
+this:<SUP>4</SUP></P><PRE>(publish :path &quot;/stream.mp3&quot; :function 'shoutcast)</PRE><P>In the call to <CODE>with-http-response</CODE>, in addition to the usual
+<CODE>request</CODE> and <CODE>entity</CODE> arguments, you need to pass
+<CODE>:content-type</CODE> and <CODE>:timeout</CODE> arguments. The
+<CODE>:content-type</CODE> argument tells AllegroServe how to set the
+Content-Type header it sends. And the <CODE>:timeout</CODE> argument
+specifies the number of seconds AllegroServe gives the function to
+generate its response. By default AllegroServe times out each request
+after five minutes. Because you're going to stream an essentially
+endless sequence of MP3s, you need much more time. There's no way to
+tell AllegroServe to <I>never</I> time out the request, so you should
+set it to the value of <CODE>*timeout-seconds*</CODE>, which you can define
+to some suitably large value such as the number of seconds in ten
+years.</P><PRE>(defparameter *timeout-seconds* (* 60 60 24 7 52 10))</PRE><P>Then, within the body of the <CODE>with-http-response</CODE> and before the
+call to <CODE>with-http-body</CODE> that will cause the response headers to
+be sent, you need to manipulate the reply that AllegroServe will
+send. The function <CODE>prepare-icy-response</CODE> encapsulates the
+necessary manipulations: changing the protocol string from the
+default of &quot;HTTP&quot; to &quot;ICY&quot; and adding the Shoutcast-specific
+headers.<SUP>5</SUP> You also need,
+in order to work around a bug in iTunes, to tell AllegroServe not to
+use <I>chunked transfer-encoding</I>.<SUP>6</SUP> The functions <CODE>request-reply-protocol-string</CODE>,
+<CODE>request-uri</CODE>, and <CODE>reply-header-slot-value</CODE> are all part
+of AllegroServe.</P><PRE>(defun prepare-icy-response (request metadata-interval)
+  (setf (request-reply-protocol-string request) &quot;ICY&quot;)
+  (loop for (k v) in (reverse
+       `((:|icy-metaint| ,(princ-to-string metadata-interval))
+         (:|icy-notice1| &quot;&lt;BR&gt;This stream blah blah blah&lt;BR&gt;&quot;)
+         (:|icy-notice2| &quot;More blah&quot;)
+         (:|icy-name|    &quot;MyLispShoutcastServer&quot;)
+         (:|icy-genre|   &quot;Unknown&quot;)
+         (:|icy-url|     ,(request-uri request))
+         (:|icy-pub|     &quot;1&quot;)))
+     do (setf (reply-header-slot-value request k) v))
+  ;; iTunes, despite claiming to speak HTTP/1.1, doesn't understand
+  ;; chunked Transfer-encoding. Grrr. So we just turn it off.
+  (turn-off-chunked-transfer-encoding request))
+
+(defun turn-off-chunked-transfer-encoding (request)
+  (setf (request-reply-strategy request)
+        (remove :chunked (request-reply-strategy request))))</PRE><P>Within the <CODE>with-http-body</CODE> of <CODE>shoutcast</CODE>, you actually
+stream the MP3 data. The function <CODE>play-songs</CODE> takes the stream
+to which it should write the data, the song source, and the metadata
+interval it should use or <CODE><B>NIL</B></CODE> if the client doesn't want
+metadata. The stream is the socket obtained from the request object,
+the song source is obtained by calling <CODE>find-song-source</CODE>, and
+the metadata interval comes from the global variable
+<CODE>*metadata-interval*</CODE>. The type of song source is controlled by
+the variable <CODE>*song-source-type*</CODE>, which for now you can set to
+<CODE>singleton</CODE> in order to use the <CODE>simple-song-queue</CODE> you
+implemented previously.</P><PRE>(defparameter *metadata-interval* (expt 2 12))
+
+(defparameter *song-source-type* 'singleton)</PRE><P>The function <CODE>play-songs</CODE> itself doesn't do much--it loops
+calling the function <CODE>play-current</CODE>, which does all the heavy
+lifting of sending the contents of a single MP3 file, skipping the ID3
+tag and embedding ICY metadata. The only wrinkle is that you need to
+keep track of when to send the metadata.</P><P>Since you must send metadata chunks at a fixed intervals, regardless
+of when you happen to switch from one MP3 file to the next, each time
+you call <CODE>play-current</CODE> you need to tell it when the next
+metadata is due, and when it returns, it must tell you the same thing
+so you can pass the information to the next call to
+<CODE>play-current</CODE>. If <CODE>play-current</CODE> gets <CODE><B>NIL</B></CODE> from the
+song source, it returns <CODE><B>NIL</B></CODE>, which allows the <CODE>play-songs</CODE>
+<CODE><B>LOOP</B></CODE> to end.</P><P>In addition to handling the looping, <CODE>play-songs</CODE> also provides
+a <CODE><B>HANDLER-CASE</B></CODE> to trap the error that will be signaled when the
+MP3 client disconnects from the server and one of the writes to the
+socket, down in <CODE>play-current</CODE>, fails. Since the
+<CODE><B>HANDLER-CASE</B></CODE> is outside the <CODE><B>LOOP</B></CODE>, handling the error will
+break out of the loop, allowing <CODE>play-songs</CODE> to return.</P><PRE>(defun play-songs (stream song-source metadata-interval)
+  (handler-case 
+      (loop
+         for next-metadata = metadata-interval
+         then (play-current 
+               stream 
+               song-source
+               next-metadata
+               metadata-interval)
+         while next-metadata)
+    (error (e) (format *trace-output* &quot;Caught error in play-songs: ~a&quot; e))))</PRE><P>Finally, you're ready to implement <CODE>play-current</CODE>, which
+actually sends the Shoutcast data. The basic idea is that you get the
+current song from the song source, open the song's file, and then
+loop reading data from the file and writing it to the socket until
+either you reach the end of the file or the current song is no longer
+the current song.</P><P>There are only two complications: One is that you need to make sure
+you send the metadata at the correct interval. The other is that if
+the file starts with an ID3 tag, you want to skip it. If you don't
+worry too much about I/O efficiency, you can implement
+<CODE>play-current</CODE> like this:</P><PRE>(defun play-current (out song-source next-metadata metadata-interval)
+  (let ((song (current-song song-source)))
+    (when song
+      (let ((metadata (make-icy-metadata (title song))))
+        (with-open-file (mp3 (file song))
+          (unless (file-position mp3 (id3-size song))
+            (error &quot;Can't skip to position ~d in ~a&quot; (id3-size song) (file song)))
+          (loop for byte = (read-byte mp3 nil nil)
+             while (and byte (still-current-p song song-source)) do
+               (write-byte byte out)
+               (decf next-metadata)
+             when (and (zerop next-metadata) metadata-interval) do
+               (write-sequence metadata out)
+               (setf next-metadata metadata-interval))
+
+          (maybe-move-to-next-song song song-source)))
+      next-metadata)))</PRE><P>This function gets the current song from the song source and gets a
+buffer containing the metadata it'll need to send by passing the
+title to <CODE>make-icy-metadata</CODE>. Then it opens the file and skips
+past the ID3 tag using the two-argument form of <CODE><B>FILE-POSITION</B></CODE>.
+Then it commences reading bytes from the file and writing them to the
+request stream.<SUP>7</SUP></P><P>It'll break out of the loop either when it reaches the end of the
+file or when the song source's current song changes out from under
+it. In the meantime, whenever <CODE>next-metadata</CODE> gets to zero (if
+you're supposed to send metadata at all), it writes <CODE>metadata</CODE>
+to the stream and resets <CODE>next-metadata</CODE>. Once it finishes the
+loop, it checks to see if the song is still the song source's current
+song; if it is, that means it broke out of the loop because it read
+the whole file, in which case it tells the song source to move to the
+next song. Otherwise, it broke out of the loop because someone
+changed the current song out from under it, and it just returns. In
+either case, it returns the number of bytes left before the next
+metadata is due so it can be passed in the next call to
+<CODE>play-current</CODE>.<SUP>8</SUP></P><P>The function <CODE>make-icy-metadata</CODE>, which takes the title of the
+current song and generates an array of bytes containing a properly
+formatted chunk of ICY metadata, is also straightforward.<SUP>9</SUP></P><PRE>(defun make-icy-metadata (title)
+  (let* ((text (format nil &quot;StreamTitle='~a';&quot; (substitute #\Space #\' title)))
+         (blocks (ceiling (length text) 16))
+         (buffer (make-array (1+ (* blocks 16))
+                             :element-type '(unsigned-byte 8)
+                             :initial-element 0)))
+    (setf (aref buffer 0) blocks)
+    (loop 
+       for char across text
+       for i from 1 
+       do (setf (aref buffer i) (char-code char)))
+    buffer))</PRE><P>Depending on how your particular Lisp implementation handles its
+streams, and also how many MP3 clients you want to serve at once, the
+simple version of <CODE>play-current</CODE> may or may not be efficient
+enough.</P><P>The potential problem with the simple implementation is that you have
+to call <CODE><B>READ-BYTE</B></CODE> and <CODE><B>WRITE-BYTE</B></CODE> for every byte you
+transfer. It's possible that each call may result in a relatively
+expensive system call to read or write one byte. And even if Lisp
+implements its own streams with internal buffering so not every call
+to <CODE><B>READ-BYTE</B></CODE> or <CODE><B>WRITE-BYTE</B></CODE> results in a system call,
+function calls still aren't free. In particular, in implementations
+that provide user-extensible streams using so-called Gray Streams,
+<CODE><B>READ-BYTE</B></CODE> and <CODE><B>WRITE-BYTE</B></CODE> may result in a generic function
+call under the covers to dispatch on the class of the stream
+argument. While generic function dispatch is normally speedy enough
+that you don't have to worry about it, it's a bit more expensive than
+a nongeneric function call and thus not something you necessarily
+want to do several million times in a few minutes if you can avoid
+it.</P><P>A more efficient, if slightly more complex, way to implement
+<CODE>play-current</CODE> is to read and write multiple bytes at a time
+using the functions <CODE><B>READ-SEQUENCE</B></CODE> and <CODE><B>WRITE-SEQUENCE</B></CODE>. This
+also gives you a chance to match your file reads with the natural
+block size of the file system, which will likely give you the best
+disk throughput. Of course, no matter what buffer size you use,
+keeping track of when to send the metadata becomes a bit more
+complicated. A more efficient version of <CODE>play-current</CODE> that
+uses <CODE><B>READ-SEQUENCE</B></CODE> and <CODE><B>WRITE-SEQUENCE</B></CODE> might look like this:</P><PRE>(defun play-current (out song-source next-metadata metadata-interval)
+  (let ((song (current-song song-source)))
+    (when song
+      (let ((metadata (make-icy-metadata (title song)))
+            (buffer (make-array size :element-type '(unsigned-byte 8))))
+        (with-open-file (mp3 (file song))
+          (labels ((write-buffer (start end)
+                     (if metadata-interval
+                       (write-buffer-with-metadata start end)
+                       (write-sequence buffer out :start start :end end)))
+
+                   (write-buffer-with-metadata (start end)
+                     (cond
+                       ((&gt; next-metadata (- end start))
+                        (write-sequence buffer out :start start :end end)
+                        (decf next-metadata (- end start)))
+                       (t 
+                        (let ((middle (+ start next-metadata)))
+                          (write-sequence buffer out :start start :end middle)
+                          (write-sequence metadata out)
+                          (setf next-metadata metadata-interval)
+                          (write-buffer-with-metadata middle end))))))
+
+            (multiple-value-bind (skip-blocks skip-bytes)
+                (floor (id3-size song) (length buffer))
+
+              (unless (file-position mp3 (* skip-blocks (length buffer)))
+                (error &quot;Couldn't skip over ~d ~d byte blocks.&quot;
+                       skip-blocks (length buffer)))
+
+              (loop for end = (read-sequence buffer mp3) 
+                 for start = skip-bytes then 0
+                 do (write-buffer start end)
+                 while (and (= end (length buffer))
+                            (still-current-p song song-source)))
+
+              (maybe-move-to-next-song song song-source)))))
+      next-metadata)))</PRE><P>Now you're ready to put all the pieces together. In the next chapter
+you'll write a Web interface to the Shoutcast server developed in
+this chapter, using the MP3 database from Chapter 27 as the source of
+songs.
+</P><HR/><DIV CLASS="notes"><P><SUP>1</SUP>The version of XMMS shipped
+with Red Hat 8.0 and 9.0 and Fedora no longer knows how to play MP3s
+because the folks at Red Hat were worried about the licensing issues
+related to the MP3 codec. To get an XMMS with MP3 support on these
+versions of Linux, you can grab the source from
+<CODE>http://www.xmms.org</CODE> and build it yourself. Or, see
+<CODE>http://www.fedorafaq.org/#xmms-mp3</CODE> for information about other
+possibilities.</P><P><SUP>2</SUP>To further confuse matters, there's a different
+streaming protocol called <I>Icecast</I>. There seems to be no
+connection between the ICY header used by Shoutcast and the Icecast
+protocol.</P><P><SUP>3</SUP>Technically, the
+implementation in this chapter will also be manipulated from two
+threads--the AllegroServe thread running the Shoutcast server and the
+REPL thread. But you can live with the race condition for now. I'll
+discuss how to use locking to make code thread safe in the next
+chapter.</P><P><SUP>4</SUP>Another thing you may want to do while working on this
+code is to evaluate the form <CODE>(net.aserve::debug-on :notrap)</CODE>.
+This tells AllegroServe to not trap errors signaled by your code,
+which will allow you to debug them in the normal Lisp debugger. In
+SLIME this will pop up a SLIME debugger buffer just like any other
+error.</P><P><SUP>5</SUP>Shoutcast headers are usually sent in lowercase, so you
+need to escape the names of the keyword symbols used to identify them
+to AllegroServe to keep the Lisp reader from converting them to all
+uppercase. Thus, you'd write <CODE>:|icy-metaint|</CODE> rather than
+<CODE>:icy-metaint</CODE>. You could also write
+<CODE>:\i\c\y-\m\e\t\a\i\n\t</CODE>, but that'd be silly.</P><P><SUP>6</SUP>The function
+<CODE>turn-off-chunked-transfer-encoding</CODE> is a bit of a kludge.
+There's no way to turn off chunked transfer encoding via
+AllegroServe's official APIs without specifying a content length
+because any client that advertises itself as an HTTP/1.1 client,
+which iTunes does, is supposed to understand it. But this does the
+trick.</P><P><SUP>7</SUP>Most MP3-playing software will display the
+metadata somewhere in the user interface. However, the XMMS program
+on Linux by default doesn't. To get XMMS to display Shoutcast
+metadata, press Ctrl+P to see the Preferences pane. Then in the Audio
+I/O Plugins tab (the leftmost tab in version 1.2.10), select the MPEG
+Layer 1/2/3 Player (<CODE>libmpg123.so</CODE>) and hit the Configure
+button. Then select the Streaming tab on the configuration window,
+and at the bottom of the tab in the SHOUTCAST/Icecast section, check
+the &quot;Enable SHOUTCAST/Icecast title streaming&quot; box.</P><P><SUP>8</SUP>Folks coming to Common Lisp from Scheme
+might wonder why <CODE>play-current</CODE> can't just call itself
+recursively. In Scheme that would work fine since Scheme
+implementations are required by the Scheme specification to support
+&quot;an unbounded number of active tail calls.&quot; Common Lisp
+implementations are allowed to have this property, but it isn't
+required by the language standard. Thus, in Common Lisp the idiomatic
+way to write loops is with a looping construct, not with recursion.</P><P><SUP>9</SUP>This
+function assumes, as has other code you've written, that your Lisp
+implementation's internal character encoding is ASCII or a superset
+of ASCII, so you can use <CODE><B>CHAR-CODE</B></CODE> to translate Lisp
+<CODE><B>CHARACTER</B></CODE> objects to bytes of ASCII data.</P></DIV></BODY></HTML>

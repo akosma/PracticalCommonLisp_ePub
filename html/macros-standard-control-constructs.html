@@ -1,0 +1,415 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.01//EN">
+<html>
+    <head>
+        <title>
+            Macros: Standard Control Constructs
+        </title>
+        <link rel="stylesheet" type="text/css" href="style.css">
+    </head>
+    <body>
+        <h1>
+            7. Macros: Standard Control Constructs
+        </h1>
+        <p>
+            While many of the ideas that originated in Lisp, from the conditional expression to garbage collection, have been incorporated into other languages, the one language feature that continues to set Common Lisp apart is its macro system. Unfortunately, the word <i>macro</i> describes a lot of things in computing to which Common Lisp's macros bear only a vague and metaphorical similarity. This causes no end of misunderstanding when Lispers try to explain to non-Lispers what a great feature macros are.<sup>1</sup> To understand Lisp's macros, you really need to come at them fresh, without preconceptions based on other things that also happen to be called macros. So let's start our discussion of Lisp's macros by taking a step back and looking at various ways languages support extensibility.
+        </p>
+        <p>
+            All programmers should be used to the idea that the definition of a language can include a standard library of functionality that's implemented in terms of the "core" language--functionality that could have been implemented by any programmer on top of the language if it hadn't been defined as part of the standard library. C's standard library, for instance, can be implemented almost entirely in portable C. Similarly, most of the ever-growing set of classes and interfaces that ship with Java's standard Java Development Kit (JDK) are written in "pure" Java.
+        </p>
+        <p>
+            One advantage of defining languages in terms of a core plus a standard library is it makes them easier to understand and implement. But the real benefit is in terms of expressiveness--since much of what you think of as "the language" is really just a library--the language is easy to extend. If C doesn't have a function to do some thing or another that you need, you can write that function, and now you have a slightly richer version of C. Similarly, in a language such as Java or Smalltalk where almost all the interesting parts of the "language" are defined in terms of classes, by defining new classes you extend the language, making it more suited for writing programs to do whatever it is you're trying to do.
+        </p>
+        <p>
+            While Common Lisp supports both these methods of extending the language, macros give Common Lisp yet another way. As I discussed briefly in Chapter 4, each macro defines its own syntax, determining how the s-expressions it's passed are turned into Lisp forms. With macros as part of the core language it's possible to build new syntax--control constructs such as <code><b>WHEN</b></code>, <code><b>DOLIST</b></code>, and <code><b>LOOP</b></code> as well as definitional forms such as <code><b>DEFUN</b></code> and <code><b>DEFPARAMETER</b></code>--as part of the "standard library" rather than having to hardwire them into the core. This has implications for how the language itself is implemented, but as a Lisp programmer you'll care more that it gives you another way to extend the language, making it a better language for expressing solutions to your particular programming problems.
+        </p>
+        <p>
+            Now, it may seem that the benefits of having another way to extend the language would be easy to recognize. But for some reason a lot of folks who haven't actually used Lisp macros--folks who think nothing of spending their days creating new functional abstractions or defining hierarchies of classes to solve their programming problems--get spooked by the idea of being able to define new syntactic abstractions. The most common cause of macrophobia seems to be bad experiences with other "macro" systems. Simple fear of the unknown no doubt plays a role, too. To avoid triggering any macrophobic reactions, I'll ease into the subject by discussing several of the standard control-construct macros defined by Common Lisp. These are some of the things that, if Lisp didn't have macros, would have to be built into the language core. When you use them, you don't have to care that they're implemented as macros, but they provide a good example of some of the things you can do with macros.<sup>2</sup> In the next chapter, I'll show you how you can define your own macros.
+        </p>
+        <h2>
+            <a name="when-and-unless" id="when-and-unless">WHEN and UNLESS</a>
+        </h2>
+        <p>
+            As you've already seen, the most basic form of conditional execution--if <i>x</i>, do <i>y</i>; otherwise do <i>z</i>--is provided by the <code><b>IF</b></code> special operator, which has this basic form:
+        </p>
+        <pre>
+(if <i>condition</i> <i>then-form</i> [<i>else-form</i>])
+</pre>
+        <p>
+            The <i>condition</i> is evaluated and, if its value is non-<code><b>NIL</b></code>, the <i>then-form</i> is evaluated and the resulting value returned. Otherwise, the <i>else-form</i>, if any, is evaluated and its value returned. If <i>condition</i> is <code><b>NIL</b></code> and there's no <i>else-form</i>, then the <code><b>IF</b></code> returns <code><b>NIL</b></code>.
+        </p>
+        <pre>
+(if (&gt; 2 3) "Yup" "Nope") ==&gt; "Nope"
+(if (&gt; 2 3) "Yup")        ==&gt; NIL
+(if (&gt; 3 2) "Yup" "Nope") ==&gt; "Yup"
+</pre>
+        <p>
+            However, <code><b>IF</b></code> isn't actually such a great syntactic construct because the <i>then-form</i> and <i>else-form</i> are each restricted to being a single Lisp form. This means if you want to perform a sequence of actions in either clause, you need to wrap them in some other syntax. For instance, suppose in the middle of a spam-filtering program you wanted to both file a message as spam and update the spam database when a message is spam. You can't write this:
+        </p>
+        <pre>
+(if (spam-p current-message)
+    (file-in-spam-folder current-message)
+    (update-spam-database current-message))
+</pre>
+        <p>
+            because the call to <code>update-spam-database</code> will be treated as the else clause, not as part of the then clause. Another special operator, <code><b>PROGN</b></code>, executes any number of forms in order and returns the value of the last form. So you could get the desired behavior by writing the following:
+        </p>
+        <pre>
+(if (spam-p current-message)
+    (progn
+      (file-in-spam-folder current-message)
+      (update-spam-database current-message)))
+</pre>
+        <p>
+            That's not too horrible. But given the number of times you'll likely have to use this idiom, it's not hard to imagine that you'd get tired of it after a while. "Why," you might ask yourself, "doesn't Lisp provide a way to say what I really want, namely, 'When <i>x</i> is true, do this, that, and the other thing'?" In other words, after a while you'd notice the pattern of an <code><b>IF</b></code> plus a <code><b>PROGN</b></code> and wish for a way to abstract away the details rather than writing them out every time.
+        </p>
+        <p>
+            This is exactly what macros provide. In this case, Common Lisp comes with a standard macro, <code><b>WHEN</b></code>, which lets you write this:
+        </p>
+        <pre>
+(when (spam-p current-message)
+  (file-in-spam-folder current-message)
+  (update-spam-database current-message))
+</pre>
+        <p>
+            But if it wasn't built into the standard library, you could define <code><b>WHEN</b></code> yourself with a macro such as this, using the backquote notation I discussed in Chapter 3:<sup>3</sup>
+        </p>
+        <pre>
+(defmacro when (condition &amp;rest body)
+  `(if ,condition (progn ,@body)))
+</pre>
+        <p>
+            A counterpart to the <code><b>WHEN</b></code> macro is <code><b>UNLESS</b></code>, which reverses the condition, evaluating its body forms only if the condition is false. In other words:
+        </p>
+        <pre>
+(defmacro unless (condition &amp;rest body)
+  `(if (not ,condition) (progn ,@body)))
+</pre>
+        <p>
+            Admittedly, these are pretty trivial macros. There's no deep black magic here; they just abstract away a few language-level bookkeeping details, allowing you to express your true intent a bit more clearly. But their very triviality makes an important point: because the macro system is built right into the language, you can write trivial macros like <code><b>WHEN</b></code> and <code><b>UNLESS</b></code> that give you small but real gains in clarity that are then multiplied by the thousands of times you use them. In Chapters 24, 26, and 31 you'll see how macros can also be used on a larger scale, creating whole domain-specific embedded languages. But first let's finish our discussion of the standard control-construct macros.
+        </p>
+        <h2>
+            <a name="cond" id="cond">COND</a>
+        </h2>
+        <p>
+            Another time raw <code><b>IF</b></code> expressions can get ugly is when you have a multibranch conditional: if <i>a</i> do <i>x</i>, else if <i>b</i> do <i>y</i>; else do <i>z</i>. There's no logical problem writing such a chain of conditional expressions with just <code><b>IF</b></code>, but it's not pretty.
+        </p>
+        <pre>
+(if a
+    (do-x)
+    (if b
+       (do-y)
+       (do-z)))
+</pre>
+        <p>
+            And it would be even worse if you needed to include multiple forms in the then clauses, requiring <code><b>PROGN</b></code>s. So, not surprisingly, Common Lisp provides a macro for expressing multibranch conditionals: <code><b>COND</b></code>. This is the basic skeleton:
+        </p>
+        <pre>
+(cond
+  (<i>test-1</i> <i>form</i>*)
+      .
+      .
+      .
+  (<i>test-N</i> <i>form</i>*))
+</pre>
+        <p>
+            Each element of the body represents one branch of the conditional and consists of a list containing a condition form and zero or more forms to be evaluated if that branch is chosen. The conditions are evaluated in the order the branches appear in the body until one of them evaluates to true. At that point, the remaining forms in that branch are evaluated, and the value of the last form in the branch is returned as the value of the <code><b>COND</b></code> as a whole. If the branch contains no forms after the condition, the value of the condition is returned instead. By convention, the branch representing the final else clause in an if/else-if chain is written with a condition of <code><b>T</b></code>. Any non-<code><b>NIL</b></code> value will work, but a <code><b>T</b></code> serves as a useful landmark when reading the code. Thus, you can write the previous nested <code><b>IF</b></code> expression using <code><b>COND</b></code> like this:
+        </p>
+        <pre>
+(cond (a (do-x))
+      (b (do-y))
+      (t (do-z)))
+</pre>
+        <h2>
+            <a name="and-or-and-not" id="and-or-and-not">AND, OR, and NOT</a>
+        </h2>
+        <p>
+            When writing the conditions in <code><b>IF</b></code>, <code><b>WHEN</b></code>, <code><b>UNLESS</b></code>, and <code><b>COND</b></code> forms, three operators that will come in handy are the boolean logic operators, <code><b>AND</b></code>, <code><b>OR</b></code>, and <code><b>NOT</b></code>.
+        </p>
+        <p>
+            <code><b>NOT</b></code> is a function so strictly speaking doesn't belong in this chapter, but it's closely tied to <code><b>AND</b></code> and <code><b>OR</b></code>. It takes a single argument and inverts its truth value, returning <code><b>T</b></code> if the argument is <code><b>NIL</b></code> and <code><b>NIL</b></code> otherwise.
+        </p>
+        <p>
+            <code><b>AND</b></code> and <code><b>OR</b></code>, however, are macros. They implement logical conjunction and disjunction of any number of subforms and are defined as macros so they can <i>short-circuit</i>. That is, they evaluate only as many of their subforms--in left-to-right order--as necessary to determine the overall truth value. Thus, <code><b>AND</b></code> stops and returns <code><b>NIL</b></code> as soon as one of its subforms evaluates to <code><b>NIL</b></code>. If all the subforms evaluate to non-<code><b>NIL</b></code>, it returns the value of the last subform. <code><b>OR</b></code>, on the other hand, stops as soon as one of its subforms evaluates to non-<code><b>NIL</b></code> and returns the resulting value. If none of the subforms evaluate to true, <code><b>OR</b></code> returns <code><b>NIL</b></code>. Here are some examples:
+        </p>
+        <pre>
+(not nil)             ==&gt; T
+(not (= 1 1))         ==&gt; NIL
+(and (= 1 2) (= 3 3)) ==&gt; NIL
+(or (= 1 2) (= 3 3))  ==&gt; T
+</pre>
+        <h2>
+            <a name="looping" id="looping">Looping</a>
+        </h2>
+        <p>
+            Control constructs are the other main kind of looping constructs. Common Lisp's looping facilities are--in addition to being quite powerful and flexible--an interesting lesson in the have-your-cake-and-eat-it-too style of programming that macros provide.
+        </p>
+        <p>
+            As it turns out, none of Lisp's 25 special operators directly support structured looping. All of Lisp's looping control constructs are macros built on top of a pair of special operators that provide a primitive goto facility.<sup>4</sup> Like many good abstractions, syntactic or otherwise, Lisp's looping macros are built as a set of layered abstractions starting from the base provided by those two special operators.
+        </p>
+        <p>
+            At the bottom (leaving aside the special operators) is a very general looping construct, <code><b>DO</b></code>. While very powerful, <code><b>DO</b></code> suffers, as do many general-purpose abstractions, from being overkill for simple situations. So Lisp also provides two other macros, <code><b>DOLIST</b></code> and <code><b>DOTIMES</b></code>, that are less flexible than <code><b>DO</b></code> but provide convenient support for the common cases of looping over the elements of a list and counting loops. While an implementation can implement these macros however it wants, they're typically implemented as macros that expand into an equivalent <code><b>DO</b></code> loop. Thus, <code><b>DO</b></code> provides a basic structured looping construct on top of the underlying primitives provided by Common Lisp's special operators, and <code><b>DOLIST</b></code> and <code><b>DOTIMES</b></code> provide two easier-to-use, if less general, constructs. And, as you'll see in the next chapter, you can build your own looping constructs on top of <code><b>DO</b></code> for situations where <code><b>DOLIST</b></code> and <code><b>DOTIMES</b></code> don't meet your needs.
+        </p>
+        <p>
+            Finally, the <code><b>LOOP</b></code> macro provides a full-blown mini-language for expressing looping constructs in a non-Lispy, English-like (or at least Algol-like) language. Some Lisp hackers love <code><b>LOOP</b></code>; others hate it. <code><b>LOOP</b></code>'s fans like it because it provides a concise way to express certain commonly needed looping constructs. Its detractors dislike it because it's not Lispy enough. But whichever side one comes down on, it's a remarkable example of the power of macros to add new constructs to the language.
+        </p>
+        <h2>
+            <a name="dolist-and-dotimes" id="dolist-and-dotimes">DOLIST and DOTIMES</a>
+        </h2>
+        <p>
+            I'll start with the easy-to-use <code><b>DOLIST</b></code> and <code><b>DOTIMES</b></code> macros.
+        </p>
+        <p>
+            <code><b>DOLIST</b></code> loops across the items of a list, executing the loop body with a variable holding the successive items of the list.<sup>5</sup> This is the basic skeleton (leaving out some of the more esoteric options):
+        </p>
+        <pre>
+(dolist (<i>var</i> <i>list-form</i>)
+  <i>body-form</i>*)
+</pre>
+        <p>
+            When the loop starts, the <i>list-form</i> is evaluated once to produce a list. Then the body of the loop is evaluated once for each item in the list with the variable <i>var</i> holding the value of the item. For instance:
+        </p>
+        <pre>
+CL-USER&gt; (dolist (x '(1 2 3)) (print x))
+1
+2
+3
+NIL
+</pre>
+        <p>
+            Used this way, the <code><b>DOLIST</b></code> form as a whole evaluates to <code><b>NIL</b></code>.
+        </p>
+        <p>
+            If you want to break out of a <code><b>DOLIST</b></code> loop before the end of the list, you can use <code><b>RETURN</b></code>.
+        </p>
+        <pre>
+CL-USER&gt; (dolist (x '(1 2 3)) (print x) (if (evenp x) (return)))
+1
+2
+NIL
+</pre>
+        <p>
+            <code><b>DOTIMES</b></code> is the high-level looping construct for counting loops. The basic template is much the same as <code><b>DOLIST</b></code>'s.
+        </p>
+        <pre>
+(dotimes (<i>var</i> <i>count-form</i>)
+  <i>body-form</i>*)
+</pre>
+        <p>
+            The <i>count-form</i> must evaluate to an integer. Each time through the loop <i>var</i> holds successive integers from 0 to one less than that number. For instance:
+        </p>
+        <pre>
+CL-USER&gt; (dotimes (i 4) (print i))
+0
+1
+2
+3
+NIL
+</pre>
+        <p>
+            As with <code><b>DOLIST</b></code>, you can use <code><b>RETURN</b></code> to break out of the loop early.
+        </p>
+        <p>
+            Because the body of both <code><b>DOLIST</b></code> and <code><b>DOTIMES</b></code> loops can contain any kind of expressions, you can also nest loops. For example, to print out the times tables from <code>1 × 1 = 1</code> to <code>20 × 20 = 400</code>, you can write this pair of nested <code><b>DOTIMES</b></code> loops:
+        </p>
+        <pre>
+(dotimes (x 20)
+  (dotimes (y 20)
+    (format t "~3d " (* (1+ x) (1+ y))))
+  (format t "~%"))
+</pre>
+        <h2>
+            <a name="do" id="do">DO</a>
+        </h2>
+        <p>
+            While <code><b>DOLIST</b></code> and <code><b>DOTIMES</b></code> are convenient and easy to use, they aren't flexible enough to use for all loops. For instance, what if you want to step multiple variables in parallel? Or use an arbitrary expression to test for the end of the loop? If neither <code><b>DOLIST</b></code> nor <code><b>DOTIMES</b></code> meet your needs, you still have access to the more general <code><b>DO</b></code> loop.
+        </p>
+        <p>
+            Where <code><b>DOLIST</b></code> and <code><b>DOTIMES</b></code> provide only one loop variable, <code><b>DO</b></code> lets you bind any number of variables and gives you complete control over how they change on each step through the loop. You also get to define the test that determines when to end the loop and can provide a form to evaluate at the end of the loop to generate a return value for the <code><b>DO</b></code> expression as a whole. The basic template looks like this:
+        </p>
+        <pre>
+(do (<i>variable-definition</i>*)
+    (<i>end-test-form</i> <i>result-form</i>*)
+  <i>statement</i>*)
+</pre>
+        <p>
+            Each <i>variable-definition</i> introduces a variable that will be in scope in the body of the loop. The full form of a single variable definition is a list containing three elements.
+        </p>
+        <pre>
+(<i>var</i> <i>init-form</i> <i>step-form</i>)
+</pre>
+        <p>
+            The <i>init-form</i> will be evaluated at the beginning of the loop and the resulting values bound to the variable <i>var</i>. Before each subsequent iteration of the loop, the <i>step-form</i> will be evaluated and the new value assigned to <i>var</i>. The <i>step-form</i> is optional; if it's left out, the variable will keep its value from iteration to iteration unless you explicitly assign it a new value in the loop body. As with the variable definitions in a <code><b>LET</b></code>, if the <i>init-form</i> is left out, the variable is bound to <code><b>NIL</b></code>. Also as with <code><b>LET</b></code>, you can use a plain variable name as shorthand for a list containing just the name.
+        </p>
+        <p>
+            At the beginning of each iteration, after all the loop variables have been given their new values, the <i>end-test-form</i> is evaluated. As long as it evaluates to <code><b>NIL</b></code>, the iteration proceeds, evaluating the <i>statements</i> in order.
+        </p>
+        <p>
+            When the <i>end-test-form</i> evaluates to true, the <i>result-forms</i> are evaluated, and the value of the last result form is returned as the value of the <code><b>DO</b></code> expression.
+        </p>
+        <p>
+            At each step of the iteration the step forms for all the variables are evaluated before assigning any of the values to the variables. This means you can refer to any of the other loop variables in the step forms.<sup>6</sup> That is, in a loop like this:
+        </p>
+        <pre>
+(do ((n 0 (1+ n))
+     (cur 0 next)
+     (next 1 (+ cur next)))
+    ((= 10 n) cur))
+</pre>
+        <p>
+            the step forms <code>(1+ n)</code>, <code>next</code>, and <code>(+ cur next)</code> are all evaluated using the old values of <code>n</code>, <code>cur</code>, and <code>next</code>. Only after all the step forms have been evaluated are the variables given their new values. (Mathematically inclined readers may notice that this is a particularly efficient way of computing the eleventh Fibonacci number.)
+        </p>
+        <p>
+            This example also illustrates another characteristic of <code><b>DO</b></code>--because you can step multiple variables, you often don't need a body at all. Other times, you may leave out the result form, particularly if you're just using the loop as a control construct. This flexibility, however, is the reason that <code><b>DO</b></code> expressions can be a bit cryptic. Where exactly do all the parentheses go? The best way to understand a <code><b>DO</b></code> expression is to keep in mind the basic template.
+        </p>
+        <pre>
+<b>(</b>do <b>(</b><i>variable-definition</i>*<b>)</b>
+    <b>(</b><i>end-test-form</i> <i>result-form</i>*<b>)</b>
+  <i>statement</i>*<b>)</b>
+</pre>
+        <p>
+            The six parentheses in that template are the only ones required by the <code><b>DO</b></code> itself. You need one pair to enclose the variable declarations, one pair to enclose the end test and result forms, and one pair to enclose the whole expression. Other forms within the <code><b>DO</b></code> may require their own parentheses--variable definitions are usually lists, for instance. And the test form is often a function call. But the skeleton of a <code><b>DO</b></code> loop will always be the same. Here are some example <code><b>DO</b></code> loops with the skeleton in bold:
+        </p>
+        <pre>
+<b>(</b>do <b>(</b>(i 0 (1+ i))<b>)</b>
+    <b>(</b>(&gt;= i 4)<b>)</b>
+  (print i)<b>)</b>
+</pre>
+        <p>
+            Notice that the result form has been omitted. This is, however, not a particularly idiomatic use of <code><b>DO</b></code>, as this loop is much more simply written using <code><b>DOTIMES</b></code>.<sup>7</sup>
+        </p>
+        <pre>
+(dotimes (i 4) (print i))
+</pre>
+        <p>
+            As another example, here's the bodiless Fibonacci-computing loop:
+        </p>
+        <pre>
+<b>(</b>do <b>(</b>(n 0 (1+ n))
+     (cur 0 next)
+     (next 1 (+ cur next))<b>)</b>
+    <b>(</b>(= 10 n) cur<b>))</b>
+</pre>
+        <p>
+            Finally, the next loop demonstrates a <code><b>DO</b></code> loop that binds no variables. It loops while the current time is less than the value of a global variable, printing "Waiting" once a minute. Note that even with no loop variables, you still need the empty variables list.
+        </p>
+        <pre>
+<b>(</b>do <b>()</b>
+    <b>(</b>(&gt; (get-universal-time) *some-future-date*)<b>)</b>
+  (format t "Waiting~%")
+  (sleep 60)<b>)</b> 
+</pre>
+        <h2>
+            <a name="the-mighty-loop" id="the-mighty-loop">The Mighty LOOP</a>
+        </h2>
+        <p>
+            For the simple cases you have <code><b>DOLIST</b></code> and <code><b>DOTIMES</b></code>. And if they don't suit your needs, you can fall back on the completely general <code><b>DO</b></code>. What more could you want?
+        </p>
+        <p>
+            Well, it turns out a handful of looping idioms come up over and over again, such as looping over various data structures: lists, vectors, hash tables, and packages. Or accumulating values in various ways while looping: collecting, counting, summing, minimizing, or maximizing. If you need a loop to do one of these things (or several at the same time), the <code><b>LOOP</b></code> macro may give you an easier way to express it.
+        </p>
+        <p>
+            The <code><b>LOOP</b></code> macro actually comes in two flavors--<i>simple</i> and <i>extended</i>. The simple version is as simple as can be--an infinite loop that doesn't bind any variables. The skeleton looks like this:
+        </p>
+        <pre>
+(loop
+  <i>body-form</i>*)
+</pre>
+        <p>
+            The forms in body are evaluated each time through the loop, which will iterate forever unless you use <code><b>RETURN</b></code> to break out. For example, you could write the previous <code><b>DO</b></code> loop with a simple <code><b>LOOP</b></code>.
+        </p>
+        <pre>
+(loop
+  (when (&gt; (get-universal-time) *some-future-date*)
+    (return))
+  (format t "Waiting~%")
+  (sleep 60))
+</pre>
+        <p>
+            The extended <code><b>LOOP</b></code> is quite a different beast. It's distinguished by the use of certain <i>loop keywords</i> that implement a special-purpose language for expressing looping idioms. It's worth noting that not all Lispers love the extended <code><b>LOOP</b></code> language. At least one of Common Lisp's original designers hated it. <code><b>LOOP</b></code>'s detractors complain that its syntax is totally un-Lispy (in other words, not enough parentheses). <code><b>LOOP</b></code>'s fans counter that that's the point: complicated looping constructs are hard enough to understand without wrapping them up in <code><b>DO</b></code>'s cryptic syntax. It's better, they say, to have a slightly more verbose syntax that gives you some clues what the heck is going on.
+        </p>
+        <p>
+            For instance, here's an idiomatic <code><b>DO</b></code> loop that collects the numbers from 1 to 10 into a list:
+        </p>
+        <pre>
+(do ((nums nil) (i 1 (1+ i)))
+    ((&gt; i 10) (nreverse nums))
+  (push i nums)) ==&gt; (1 2 3 4 5 6 7 8 9 10)
+</pre>
+        <p>
+            A seasoned Lisper won't have any trouble understanding that code--it's just a matter of understanding the basic form of a <code><b>DO</b></code> loop and recognizing the <code><b>PUSH</b></code>/<code><b>NREVERSE</b></code> idiom for building up a list. But it's not exactly transparent. The <code><b>LOOP</b></code> version, on the other hand, is almost understandable as an English sentence.
+        </p>
+        <pre>
+(loop for i from 1 to 10 collecting i) ==&gt; (1 2 3 4 5 6 7 8 9 10)
+</pre>
+        <p>
+            The following are some more examples of simple uses of <code><b>LOOP</b></code>. This sums the first ten squares:
+        </p>
+        <pre>
+(loop for x from 1 to 10 summing (expt x 2)) ==&gt; 385
+</pre>
+        <p>
+            This counts the number of vowels in a string:
+        </p>
+        <pre>
+(loop for x across "the quick brown fox jumps over the lazy dog"
+      counting (find x "aeiou")) ==&gt; 11
+</pre>
+        <p>
+            This computes the eleventh Fibonacci number, similar to the <code><b>DO</b></code> loop used earlier:
+        </p>
+        <pre>
+(loop for i below 10
+      and a = 0 then b
+      and b = 1 then (+ b a)
+      finally (return  a))
+</pre>
+        <p>
+            The symbols <code>across</code>, <code>and</code>, <code>below</code>, <code>collecting</code>, <code>counting</code>, <code>finally</code>, <code>for</code>, <code>from</code>, <code>summing</code>, <code>then</code>, and <code>to</code> are some of the loop keywords whose presence identifies these as instances of the extended <code><b>LOOP</b></code>. <sup>8</sup>
+        </p>
+        <p>
+            I'll save the details of <code><b>LOOP</b></code> for Chapter 22, but it's worth noting here as another example of the way macros can be used to extend the base language. While <code><b>LOOP</b></code> provides its own language for expressing looping constructs, it doesn't cut you off from the rest of Lisp. The loop keywords are parsed according to loop's grammar, but the rest of the code in a <code><b>LOOP</b></code> is regular Lisp code.
+        </p>
+        <p>
+            And it's worth pointing out one more time that while the <code><b>LOOP</b></code> macro is quite a bit more complicated than macros such as <code><b>WHEN</b></code> or <code><b>UNLESS</b></code>, it <i>is</i> just another macro. If it hadn't been included in the standard library, you could implement it yourself or get a third-party library that does.
+        </p>
+        <p>
+            With that I'll conclude our tour of the basic control-construct macros. Now you're ready to take a closer look at how to define your own macros.
+        </p>
+        <hr>
+        <div class="notes">
+            <p>
+                <sup>1</sup>To see what this misunderstanding looks like, find any longish Usenet thread cross-posted between comp.lang.lisp and any other comp.lang.* group with <i>macro</i> in the subject. A rough paraphrase goes like this:
+            </p>
+            <p>
+                Lispnik: "Lisp is the best because of its macros!";
+            </p>
+            <p>
+                Othernik: "You think Lisp is good <i>because of</i> macros?! But macros are horrible and evil; Lisp must be horrible and evil."
+            </p>
+            <p>
+                <sup>2</sup>Another important class of language constructs that are defined using macros are all the definitional constructs such as <code><b>DEFUN</b></code>, <code><b>DEFPARAMETER</b></code>, <code><b>DEFVAR</b></code>, and others. In Chapter 24 you'll define your own definitional macros that will allow you to concisely write code for reading and writing binary data.
+            </p>
+            <p>
+                <sup>3</sup>You can't actually feed this definition to Lisp because it's illegal to redefine names in the <code>COMMON-LISP</code> package where <code><b>WHEN</b></code> comes from. If you really want to try writing such a macro, you'd need to change the name to something else, such as <code>my-when</code>.
+            </p>
+            <p>
+                <sup>4</sup>The special operators, if you must know, are <code><b>TAGBODY</b></code> and <code><b>GO</b></code>. There's no need to discuss them now, but I'll cover them in Chapter 20.
+            </p>
+            <p>
+                <sup>5</sup><code><b>DOLIST</b></code> is similar to Perl's <code>foreach</code> or Python's <code>for</code>. Java added a similar kind of loop construct with the "enhanced" <code>for</code> loop in Java 1.5, as part of JSR-201. Notice what a difference macros make. A Lisp programmer who notices a common pattern in their code can write a macro to give themselves a source-level abstraction of that pattern. A Java programmer who notices the same pattern has to convince Sun that this particular abstraction is worth adding to the language. Then Sun has to publish a JSR and convene an industry-wide "expert group" to hash everything out. That process--according to Sun--takes an average of 18 months. After that, the compiler writers all have to go upgrade their compilers to support the new feature. And even once the Java programmer's favorite compiler supports the new version of Java, they probably <i>still</i> can't use the new feature until they're allowed to break source compatibility with older versions of Java. So an annoyance that Common Lisp programmers can resolve for themselves within five minutes plagues Java programmers for years.
+            </p>
+            <p>
+                <sup>6</sup>A variant of <code><b>DO</b></code>, <code><b>DO*</b></code>, assigns each variable its value before evaluating the step form for subsequent variables. For more details, consult your favorite Common Lisp reference.
+            </p>
+            <p>
+                <sup>7</sup>The <code><b>DOTIMES</b></code> is also preferred because the macro expansion will likely include declarations that allow the compiler to generate more efficient code.
+            </p>
+            <p>
+                <sup>8</sup><i>Loop keywords</i> is a bit of a misnomer since they aren't keyword symbols. In fact, <code><b>LOOP</b></code> doesn't care what package the symbols are from. When the <code><b>LOOP</b></code> macro parses its body, it considers any appropriately named symbols equivalent. You could even use true keywords if you wanted--<code>:for</code>, <code>:across</code>, and so on--because they also have the correct name. But most folks just use plain symbols. Because the loop keywords are used only as syntactic markers, it doesn't matter if they're used for other purposes--as function or variable names.
+            </p>
+        </div>
+        <div class="copyright">
+            Copyright © 2003-2005, Peter Seibel
+        </div>
+    </body>
+</html>

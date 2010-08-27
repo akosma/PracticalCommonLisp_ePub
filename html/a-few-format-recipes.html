@@ -1,0 +1,548 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.01//EN">
+<html>
+    <head>
+        <title>
+            A Few FORMAT Recipes
+        </title>
+        <link rel="stylesheet" type="text/css" href="style.css">
+    </head>
+    <body>
+        <h1>
+            18. A Few FORMAT Recipes
+        </h1>
+        <p>
+            Common Lisp's <code><b>FORMAT</b></code> function is--along with the extended <code><b>LOOP</b></code> macro--one of the two Common Lisp features that inspires a strong emotional response in a lot of Common Lisp users. Some love it; others hate it.<sup>1</sup>
+        </p>
+        <p>
+            <code><b>FORMAT</b></code>'s fans love it for its great power and concision, while its detractors hate it because of the potential for misuse and its opacity. Complex <code><b>FORMAT</b></code> control strings sometimes bear a suspicious resemblance to line noise, but <code><b>FORMAT</b></code> remains popular with Common Lispers who like to be able to generate little bits of human-readable output without having to clutter their code with lots of output-generating code. While <code><b>FORMAT</b></code>'s control strings can be cryptic, at least a single <code><b>FORMAT</b></code> expression doesn't clutter things up too badly. For instance, suppose you want to print the values in a list delimited with commas. You could write this:
+        </p>
+        <pre>
+(loop for cons on list
+    do (format t "~a" (car cons))
+    when (cdr cons) do (format t ", "))
+</pre>
+        <p>
+            That's not too bad, but anyone reading this code has to mentally parse it just to figure out that all it's doing is printing the contents of <code>list</code> to standard output. On the other hand, you can tell at a glance that the following expression is printing <code>list</code>, in some form, to standard output:
+        </p>
+        <pre>
+(format t "~{~a~^, ~}" list)
+</pre>
+        <p>
+            If you care exactly what form the output will take, then you'll have to examine the control string, but if all you want is a first-order approximation of what this line of code is doing, that's immediately available.
+        </p>
+        <p>
+            At any rate, you should have at least a reading knowledge of <code><b>FORMAT</b></code>, and it's worth getting a sense of what it can do before you affiliate yourself with the pro- or anti-<code><b>FORMAT</b></code> camp. It's also important to understand at least the basics of <code><b>FORMAT</b></code> because other standard functions, such as the condition-signaling functions discussed in the next chapter, use <code><b>FORMAT</b></code>-style control strings to generate output.
+        </p>
+        <p>
+            To further complicate matters, <code><b>FORMAT</b></code> supports three quite different kinds of formatting: printing tables of data, <i>pretty-printing</i> s-expressions, and generating human-readable messages with interpolated values. Printing tables of data as text is a bit passé these days; it's one of those reminders that Lisp is nearly as old as FORTRAN. In fact, several of the directives you can use to print floating-point values in fixed-width fields were based quite directly on FORTRAN <i>edit descriptors</i>, which are used in FORTRAN to read and print columns of data arranged in fixed-width fields. However, using Common Lisp as a FORTRAN replacement is beyond the scope of this book, so I won't discuss those aspects of <code><b>FORMAT</b></code>.
+        </p>
+        <p>
+            Pretty-printing is likewise beyond the scope of this book--not because it's passé but just because it's too big a topic. Briefly, the Common Lisp pretty printer is a customizable system for printing block-structured data such as--but not limited to--s-expressions while varying indentation and dynamically adding line breaks as needed. It's a great thing when you need it, but it's not often needed in day-to-day programming.<sup>2</sup>
+        </p>
+        <p>
+            Instead, I'll focus on the parts of <code><b>FORMAT</b></code> you can use to generate human-readable strings with interpolated values. Even limiting the scope in that way, there's still a fair bit to cover. You shouldn't feel obliged to remember every detail described in this chapter. You can get quite far with just a few <code><b>FORMAT</b></code> idioms. I'll describe the most important features of <code><b>FORMAT</b></code> first; it's up to you how much of a <code><b>FORMAT</b></code> wizard you want to become.
+        </p>
+        <h2>
+            <a name="the-format-function" id="the-format-function">The FORMAT Function</a>
+        </h2>
+        <p>
+            As you've seen in previous chapters, the <code><b>FORMAT</b></code> function takes two required arguments: a destination for its output and a control string that contains literal text and embedded <i>directives</i>. Any additional arguments provide the values used by the directives in the control string that interpolate values into the output. I'll refer to these arguments as <i>format arguments</i>.
+        </p>
+        <p>
+            The first argument to <code><b>FORMAT</b></code>, the destination for the output, can be <code><b>T</b></code>, <code><b>NIL</b></code>, a stream, or a string with a fill pointer. <code><b>T</b></code> is shorthand for the stream <code><b>*STANDARD-OUTPUT*</b></code>, while <code><b>NIL</b></code> causes <code><b>FORMAT</b></code> to generate its output to a string, which it then returns.<sup>3</sup> If the destination is a stream, the output is written to the stream. And if the destination is a string with a fill pointer, the formatted output is added to the end of the string and the fill pointer is adjusted appropriately. Except when the destination is <code><b>NIL</b></code> and it returns a string, <code><b>FORMAT</b></code> returns <code><b>NIL</b></code>.
+        </p>
+        <p>
+            The second argument, the control string, is, in essence, a program in the <code><b>FORMAT</b></code> language. The <code><b>FORMAT</b></code> language isn't Lispy at all--its basic syntax is based on characters, not s-expressions, and it's optimized for compactness rather than easy comprehension. This is why a complex <code><b>FORMAT</b></code> control string can end up looking like line noise.
+        </p>
+        <p>
+            Most of <code><b>FORMAT</b></code>'s directives simply interpolate an argument into the output in one form or another. Some directives, such as <code>~%</code>, which causes <code><b>FORMAT</b></code> to emit a newline, don't consume any arguments. And others, as you'll see, can consume more than one argument. One directive even allows you to jump around in the list of arguments in order to process the same argument more than once or to skip certain arguments in certain situations. But before I discuss specific directives, let's look at the general syntax of a directive.
+        </p>
+        <h2>
+            <a name="format-directives" id="format-directives">FORMAT Directives</a>
+        </h2>
+        <p>
+            All directives start with a tilde (<code>~</code>) and end with a single character that identifies the directive. You can write the character in either upper- or lowercase. Some directives take <i>prefix parameters</i>, which are written immediately following the tilde, separated by commas, and used to control things such as how many digits to print after the decimal point when printing a floating-point number. For example, the <code>~$</code> directive, one of the directives used to print floating-point values, by default prints two digits following the decimal point.
+        </p>
+        <pre>
+CL-USER&gt; (format t "~$" pi)
+3.14
+NIL
+</pre>
+        <p>
+            However, with a prefix parameter, you can specify that it should print its argument to, say, five decimal places like this:
+        </p>
+        <pre>
+CL-USER&gt; (format t "~5$" pi)
+3.14159
+NIL
+</pre>
+        <p>
+            The values of prefix parameters are either numbers, written in decimal, or characters, written as a single quote followed by the desired character. The value of a prefix parameter can also be derived from the format arguments in two ways: A prefix parameter of <code>v</code> causes <code><b>FORMAT</b></code> to consume one format argument and use its value for the prefix parameter. And a prefix parameter of <code>#</code> will be evaluated as the number of remaining format arguments. For example:
+        </p>
+        <pre>
+CL-USER&gt; (format t "~v$" 3 pi)
+3.142
+NIL
+CL-USER&gt; (format t "~#$" pi)
+3.1
+NIL
+</pre>
+        <p>
+            I'll give some more realistic examples of how you can use the <code>#</code> argument in the section "Conditional Formatting."
+        </p>
+        <p>
+            You can also omit prefix parameters altogether. However, if you want to specify one parameter but not the ones before it, you must include a comma for each unspecified parameter. For instance, the <code>~F</code> directive, another directive for printing floating-point values, also takes a parameter to control the number of decimal places to print, but it's the second parameter rather than the first. If you want to use <code>~F</code> to print a number to five decimal places, you can write this:
+        </p>
+        <pre>
+CL-USER&gt; (format t "~,5f" pi)
+3.14159
+NIL
+</pre>
+        <p>
+            You can also modify the behavior of some directives with colon and at-sign <i>modifiers</i>, which are placed after any prefix parameters and before the directive's identifying character. These modifiers change the behavior of the directive in small ways. For instance, with a colon modifier, the <code>~D</code> directive used to output integers in decimal emits the number with commas separating every three digits, while the at-sign modifier causes <code>~D</code> to include a plus sign when the number is positive.
+        </p>
+        <pre>
+CL-USER&gt; (format t "~d" 1000000)
+1000000
+NIL
+CL-USER&gt; (format t "~:d" 1000000)
+1,000,000
+NIL
+CL-USER&gt; (format t "~@d" 1000000)
++1000000
+NIL
+</pre>
+        <p>
+            When it makes sense, you can combine the colon and at-sign modifiers to get both modifications.
+        </p>
+        <pre>
+CL-USER&gt; (format t "~:@d" 1000000)
++1,000,000
+NIL
+</pre>
+        <p>
+            In directives where the two modified behaviors can't be meaningfully combined, using both modifiers is either undefined or given a third meaning.
+        </p>
+        <h2>
+            <a name="basic-formatting" id="basic-formatting">Basic Formatting</a>
+        </h2>
+        <p>
+            Now you're ready to look at specific directives. I'll start with several of the most commonly used directives, including some you've seen in previous chapters.
+        </p>
+        <p>
+            The most general-purpose directive is <code>~A</code>, which consumes one format argument of any type and outputs it in <i>aesthetic</i> (human-readable) form. For example, strings are output without quotation marks or escape characters, and numbers are output in a natural way for the type of number. If you just want to emit a value for human consumption, this directive is your best bet.
+        </p>
+        <pre>
+(format nil "The value is: ~a" 10)           ==&gt; "The value is: 10"
+(format nil "The value is: ~a" "foo")        ==&gt; "The value is: foo"
+(format nil "The value is: ~a" (list 1 2 3)) ==&gt; "The value is: (1 2 3)"
+</pre>
+        <p>
+            A closely related directive, <code>~S</code>, likewise consumes one format argument of any type and outputs it. However, <code>~S</code> tries to generate output that can be read back in with <code><b>READ</b></code>. Thus, strings will be enclosed in quotation marks, symbols will be package-qualified when necessary, and so on. Objects that don't have a <code><b>READ</b></code>able representation are printed with the unreadable object syntax, <code>#&lt;&gt;</code>. With a colon modifier, both the <code>~A</code> and <code>~S</code> directives emit <code><b>NIL</b></code> as <code>()</code> rather than <code><b>NIL</b></code>. Both the <code>~A</code> and <code>~S</code> directives also take up to four prefix parameters, which can be used to control whether padding is added after (or before with the at-sign modifier) the value, but those parameters are only really useful for generating tabular data.
+        </p>
+        <p>
+            The other two most frequently used directives are <code>~%</code>, which emits a newline, and <code>~&amp;</code>, which emits a <i>fresh line</i>. The difference between the two is that <code>~%</code> always emits a newline, while <code>~&amp;</code> emits one only if it's not already at the beginning of a line. This is handy when writing loosely coupled functions that each generate a piece of output and that need to be combined in different ways. For instance, if one function generates output that ends with a newline (<code>~%</code>) and another function generates some output that starts with a fresh line (<code>~&amp;</code>), you don't have to worry about getting an extra blank line if you call them one after the other. Both of these directives can take a single prefix parameter that specifies the number of newlines to emit. The <code>~%</code> directive will simply emit that many newline characters, while the <code>~&amp;</code> directive will emit either <i>n</i> - 1 or <i>n</i> newlines, depending on whether it starts at the beginning of a line.
+        </p>
+        <p>
+            Less frequently used is the related <code>~~</code> directive, which causes <code><b>FORMAT</b></code> to emit a literal tilde. Like the <code>~%</code> and <code>~&amp;</code> directives, it can be parameterized with a number that controls how many tildes to emit.
+        </p>
+        <h2>
+            <a name="character-and-integer-directives" id="character-and-integer-directives">Character and Integer Directives</a>
+        </h2>
+        <p>
+            In addition to the general-purpose directives, <code>~A</code> and <code>~S</code>, <code><b>FORMAT</b></code> supports several directives that can be used to emit values of specific types in particular ways. One of the simplest of these is the <code>~C</code> directive, which is used to emit characters. It takes no prefix arguments but can be modified with the colon and at-sign modifiers. Unmodified, its behavior is no different from <code>~A</code> except that it works only with characters. The modified versions are more useful. With a colon modifier, <code>~:C</code> outputs <i>nonprinting</i> characters such as space, tab, and newline by name. This is useful if you want to emit a message to the user about some character. For instance, the following:
+        </p>
+        <pre>
+(format t "Syntax error. Unexpected character: ~:c" char)
+</pre>
+        <p>
+            can emit messages like this:
+        </p>
+        <pre>
+Syntax error. Unexpected character: a
+</pre>
+        <p>
+            but also like the following:
+        </p>
+        <pre>
+Syntax error. Unexpected character: Space
+</pre>
+        <p>
+            With the at-sign modifier, <code>~@C</code> will emit the character in Lisp's literal character syntax.
+        </p>
+        <pre>
+CL-USER&gt; (format t "~@c~%" #\a)
+#\a
+NIL
+</pre>
+        <p>
+            With both the colon and at-sign modifiers, the <code>~C</code> directive can print extra information about how to enter the character at the keyboard if it requires special key combinations. For instance, on the Macintosh, in certain applications you can enter a null character (character code 0 in ASCII or in any ASCII superset such as ISO-8859-1 or Unicode) by pressing the Control key and typing @. In OpenMCL, if you print the null character with the <code>~:C</code> directive, it tells you this:
+        </p>
+        <pre>
+(format nil "~:@c" (code-char 0)) ==&gt; "^@ (Control @)"
+</pre>
+        <p>
+            However, not all Lisps implement this aspect of the <code>~C</code> directive. And even if they do, it may or may not be accurate--for instance, if you're running OpenMCL in SLIME, the <code>C-@</code> key chord is intercepted by Emacs, invoking <code>set-mark-command</code>.<sup>4</sup>
+        </p>
+        <p>
+            Format directives dedicated to emitting numbers are another important category. While you can use the <code>~A</code> and <code>~S</code> directives to emit numbers, if you want fine control over how they're printed, you need to use one of the number-specific directives. The numeric directives can be divided into two subcategories: directives for formatting integer values and directives for formatting floating-point values.
+        </p>
+        <p>
+            Five closely related directives format integer values: <code>~D</code>, <code>~X</code>, <code>~O</code>, <code>~B</code>, and <code>~R</code>. The most frequently used is the <code>~D</code> directive, which outputs integers in base 10.
+        </p>
+        <pre>
+(format nil "~d" 1000000) ==&gt; "1000000"
+</pre>
+        <p>
+            As I mentioned previously, with a colon modifier it adds commas.
+        </p>
+        <pre>
+(format nil "~:d" 1000000) ==&gt; "1,000,000"
+</pre>
+        <p>
+            And with an at-sign modifier, it always prints a sign.
+        </p>
+        <pre>
+(format nil "~@d" 1000000) ==&gt; "+1000000"
+</pre>
+        <p>
+            And the two modifiers can be combined.
+        </p>
+        <pre>
+(format nil "~:@d" 1000000) ==&gt; "+1,000,000"
+</pre>
+        <p>
+            The first prefix parameter can specify a minimum width for the output, and the second parameter can specify a padding character to use. The default padding character is space, and padding is always inserted before the number itself.
+        </p>
+        <pre>
+(format nil "~12d" 1000000)    ==&gt; "     1000000"
+(format nil "~12,'0d" 1000000) ==&gt; "000001000000"
+</pre>
+        <p>
+            These parameters are handy for formatting things such as dates in a fixed-width format.
+        </p>
+        <pre>
+(format nil "~4,'0d-~2,'0d-~2,'0d" 2005 6 10) ==&gt; "2005-06-10"
+</pre>
+        <p>
+            The third and fourth parameters are used in conjunction with the colon modifier: the third parameter specifies the character to use as the separator between groups and digits, and the fourth parameter specifies the number of digits per group. These parameters default to a comma and the number 3. Thus, you can use the directive <code>~:D</code> without parameters to output large integers in standard format for the United States but can change the comma to a period and the grouping from 3 to 4 with <code>~,,'.,4D</code>.
+        </p>
+        <pre>
+(format nil "~:d" 100000000)       ==&gt; "100,000,000"
+(format nil "~,,'.,4:d" 100000000) ==&gt; "1.0000.0000"
+</pre>
+        <p>
+            Note that you must use commas to hold the places of the unspecified width and padding character parameters, allowing them to keep their default values.
+        </p>
+        <p>
+            The <code>~X</code>, <code>~O</code>, and <code>~B</code> directives work just like the <code>~D</code> directive except they emit numbers in hexadecimal (base 16), octal (base 8), and binary (base 2).
+        </p>
+        <pre>
+(format nil "~x" 1000000) ==&gt; "f4240"
+(format nil "~o" 1000000) ==&gt; "3641100"
+(format nil "~b" 1000000) ==&gt; "11110100001001000000"
+</pre>
+        <p>
+            Finally, the <code>~R</code> directive is the general <i>radix</i> directive. Its first parameter is a number between 2 and 36 (inclusive) that indicates what base to use. The remaining parameters are the same as the four parameters accepted by the <code>~D</code>, <code>~X</code>, <code>~O</code>, and <code>~B</code> directives, and the colon and at-sign modifiers modify its behavior in the same way. The <code>~R</code> directive also has some special behavior when used with no prefix parameters, which I'll discuss in the section "English-Language Directives."
+        </p>
+        <h2>
+            <a name="floating-point-directives" id="floating-point-directives">Floating-Point Directives</a>
+        </h2>
+        <p>
+            Four directives format floating-point values: <code>~F</code>, <code>~E</code>, <code>~G</code>, and <code>~$</code>. The first three of these are the directives based on FORTRAN's edit descriptors. I'll skip most of the details of those directives since they mostly have to do with formatting floating-point values for use in tabular form. However, you can use the <code>~F</code>, <code>~E</code>, and <code>~$</code> directives to interpolate floating-point values into text. The <code>~G</code>, or <i>general,</i> floating-point directive, on the other hand, combines aspects of the <code>~F</code> and <code>~E</code> directives in a way that only really makes sense for generating tabular output.
+        </p>
+        <p>
+            The <code>~F</code> directive emits its argument, which should be a number,<sup>5</sup> in decimal format, possibly controlling the number of digits after the decimal point. The <code>~F</code> directive is, however, allowed to use computerized scientific notation if the number is sufficiently large or small. The <code>~E</code> directive, on the other hand, always emits numbers in computerized scientific notation. Both of these directives take a number of prefix parameters, but you need to worry only about the second, which controls the number of digits to print after the decimal point.
+        </p>
+        <pre>
+(format nil "~f" pi)   ==&gt; "3.141592653589793d0"
+(format nil "~,4f" pi) ==&gt; "3.1416"
+(format nil "~e" pi)   ==&gt; "3.141592653589793d+0"
+(format nil "~,4e" pi) ==&gt; "3.1416d+0"
+</pre>
+        <p>
+            The <code>~$</code>, or monetary, directive is similar to <code>~F</code> but a bit simpler. As its name suggests, it's intended for emitting monetary units. With no parameters, it's basically equivalent to <code>~,2F</code>. To modify the number of digits printed after the decimal point, you use the <i>first</i> parameter, while the second parameter controls the minimum number of digits to print before the decimal point.
+        </p>
+        <pre>
+(format nil "~$" pi)    ==&gt; "3.14"
+(format nil "~2,4$" pi) ==&gt; "0003.14"
+</pre>
+        <p>
+            All three directives, <code>~F</code>, <code>~E</code>, and <code>~$</code>, can be made to always print a sign, plus or minus, with the at-sign modifier.<sup>6</sup>
+        </p>
+        <h2>
+            <a name="english-language-directives" id="english-language-directives">English-Language Directives</a>
+        </h2>
+        <p>
+            Some of the handiest <code><b>FORMAT</b></code> directives for generating human-readable messages are the ones for emitting English text. These directives allow you to emit numbers as English words, to emit plural markers based on the value of a format argument, and to apply case conversions to sections of <code><b>FORMAT</b></code>'s output.
+        </p>
+        <p>
+            The <code>~R</code> directive, which I discussed in "Character and Integer Directives," when used with no base specified, prints numbers as English words or Roman numerals. When used with no prefix parameter and no modifiers, it emits the number in words as a cardinal number.
+        </p>
+        <pre>
+(format nil "~r" 1234) ==&gt; "one thousand two hundred thirty-four"
+</pre>
+        <p>
+            With the colon modifier, it emits the number as an ordinal.
+        </p>
+        <pre>
+(format nil "~:r" 1234) ==&gt; "one thousand two hundred thirty-fourth"
+</pre>
+        <p>
+            And with an at-sign modifier, it emits the number as a Roman numeral; with both an at-sign and a colon, it emits "old-style" Roman numerals in which fours and nines are written as IIII and VIIII instead of IV and IX.
+        </p>
+        <pre>
+(format nil "~@r" 1234)  ==&gt; "MCCXXXIV"
+(format nil "~:@r" 1234) ==&gt; "MCCXXXIIII"
+</pre>
+        <p>
+            For numbers too large to be represented in the given form, <code>~R</code> behaves like <code>~D</code>.
+        </p>
+        <p>
+            To help you generate messages with words properly pluralized, <code><b>FORMAT</b></code> provides the <code>~P</code> directive, which simply emits an <i>s</i> unless the corresponding argument is <code>1</code>.
+        </p>
+        <pre>
+(format nil "file~p" 1)  ==&gt; "file"
+(format nil "file~p" 10) ==&gt; "files"
+(format nil "file~p" 0)  ==&gt; "files"
+</pre>
+        <p>
+            Typically, however, you'll use <code>~P</code> with the colon modifier, which causes it to reprocess the previous format argument.
+        </p>
+        <pre>
+(format nil "~r file~:p" 1)  ==&gt; "one file"
+(format nil "~r file~:p" 10) ==&gt; "ten files"
+(format nil "~r file~:p" 0)  ==&gt; "zero files"
+</pre>
+        <p>
+            With the at-sign modifier, which can be combined with the colon modifier, <code>~P</code> emits either <i>y</i> or <i>ies</i>.
+        </p>
+        <pre>
+(format nil "~r famil~:@p" 1)  ==&gt; "one family"
+(format nil "~r famil~:@p" 10) ==&gt; "ten families"
+(format nil "~r famil~:@p" 0)  ==&gt; "zero families"
+</pre>
+        <p>
+            Obviously, <code>~P</code> can't solve all pluralization problems and is no help for generating messages in other languages, but it's handy for the cases it does handle. And the <code>~[</code> directive, which I'll discuss in a moment, gives you a more flexible way to conditionalize parts of <code><b>FORMAT</b></code>'s output.
+        </p>
+        <p>
+            The last directive for dealing with emitting English text is <code>~(</code>, which allows you to control the case of text in the output. Each <code>~(</code> is paired with a <code>~)</code>, and all the output generated by the portion of the control string between the two markers will be converted to all lowercase.
+        </p>
+        <pre>
+(format nil "~(~a~)" "FOO") ==&gt; "foo"
+(format nil "~(~@r~)" 124)  ==&gt; "cxxiv"
+</pre>
+        <p>
+            You can modify <code>~(</code> with an at sign to make it capitalize the first word in a section of text, with a colon to make it to capitalize all words, and with both modifiers to convert all text to uppercase. (A <i>word</i> for the purpose of this directive is a sequence of alphanumeric characters delimited by nonalphanumeric characters or the ends of the text.)
+        </p>
+        <pre>
+(format nil "~(~a~)" "tHe Quick BROWN foX")   ==&gt; "the quick brown fox"
+(format nil "~@(~a~)" "tHe Quick BROWN foX")  ==&gt; "The quick brown fox"
+(format nil "~:(~a~)" "tHe Quick BROWN foX")  ==&gt; "The Quick Brown Fox"
+(format nil "~:@(~a~)" "tHe Quick BROWN foX") ==&gt; "THE QUICK BROWN FOX"
+</pre>
+        <h2>
+            <a name="conditional-formatting" id="conditional-formatting">Conditional Formatting</a>
+        </h2>
+        <p>
+            In addition to directives that interpolate arguments and modify other output, <code><b>FORMAT</b></code> provides several directives that implement simple control constructs within the control string. One of these, which you used in Chapter 9, is the <i>conditional</i> directive <code>~[.</code> This directive is closed by a corresponding <code>~]</code>, and in between are a number of clauses separated by <code>~;</code>. The job of the <code>~[</code> directive is to pick one of the clauses, which is then processed by <code><b>FORMAT</b></code>. With no modifiers or parameters, the clause is selected by numeric index; the <code>~[</code> directive consumes a format argument, which should be a number, and takes the <i>nth</i> (zero-based) clause where <i>N</i> is the value of the argument.
+        </p>
+        <pre>
+(format nil "~[cero~;uno~;dos~]" 0) ==&gt; "cero"
+(format nil "~[cero~;uno~;dos~]" 1) ==&gt; "uno"
+(format nil "~[cero~;uno~;dos~]" 2) ==&gt; "dos"
+</pre>
+        <p>
+            If the value of the argument is greater than the number of clauses, nothing is printed.
+        </p>
+        <pre>
+(format nil "~[cero~;uno~;dos~]" 3) ==&gt; ""
+</pre>
+        <p>
+            However, if the last clause separator is <code>~:;</code> instead of <code>~;</code>, then the last clause serves as a default clause.
+        </p>
+        <pre>
+(format nil "~[cero~;uno~;dos~:;mucho~]" 3)   ==&gt; "mucho"
+(format nil "~[cero~;uno~;dos~:;mucho~]" 100) ==&gt; "mucho"
+</pre>
+        <p>
+            It's also possible to specify the clause to be selected using a prefix parameter. While it'd be silly to use a literal value in the control string, recall that <code>#</code> used as a prefix parameter means the number of arguments remaining to be processed. Thus, you can define a format string such as the following:
+        </p>
+        <pre>
+(defparameter *list-etc*
+  "~#[NONE~;~a~;~a and ~a~:;~a, ~a~]~#[~; and ~a~:;, ~a, etc~].")
+</pre>
+        <p>
+            and then use it like this:
+        </p>
+        <pre>
+(format nil *list-etc*)                ==&gt; "NONE."
+(format nil *list-etc* 'a)             ==&gt; "A."
+(format nil *list-etc* 'a 'b)          ==&gt; "A and B."
+(format nil *list-etc* 'a 'b 'c)       ==&gt; "A, B and C."
+(format nil *list-etc* 'a 'b 'c 'd)    ==&gt; "A, B, C, etc."
+(format nil *list-etc* 'a 'b 'c 'd 'e) ==&gt; "A, B, C, etc."
+</pre>
+        <p>
+            Note that the control string actually contains two <code>~[~]</code> directives--both of which use <code>#</code> to select the clause to use. The first consumes between zero and two arguments, while the second consumes one more, if available. <code><b>FORMAT</b></code> will silently ignore any arguments not consumed while processing the control string.
+        </p>
+        <p>
+            With a colon modifier, the <code>~[</code> can contain only two clauses; the directive consumes a single argument and processes the first clause if the argument is <code><b>NIL</b></code> and the second clause is otherwise. You used this variant of <code>~[</code> in Chapter 9 to generate pass/fail messages, like this:
+        </p>
+        <pre>
+(format t "~:[FAIL~;pass~]" test-result)
+</pre>
+        <p>
+            Note that either clause can be empty, but the directive must contain a <code>~;</code>.
+        </p>
+        <p>
+            Finally, with an at-sign modifier, the <code>~[</code> directive can have only one clause. The directive consumes one argument and, if it's non-<code><b>NIL</b></code>, processes the clause after backing up to make the argument available to be consumed again.
+        </p>
+        <pre>
+(format nil "~@[x = ~a ~]~@[y = ~a~]" 10 20)   ==&gt; "x = 10 y = 20"
+(format nil "~@[x = ~a ~]~@[y = ~a~]" 10 nil)  ==&gt; "x = 10 "
+(format nil "~@[x = ~a ~]~@[y = ~a~]" nil 20)  ==&gt; "y = 20"
+(format nil "~@[x = ~a ~]~@[y = ~a~]" nil nil) ==&gt; ""
+</pre>
+        <h2>
+            <a name="iteration" id="iteration">Iteration</a>
+        </h2>
+        <p>
+            Another <code><b>FORMAT</b></code> directive that you've seen already, in passing, is the iteration directive <code>~{</code>. This directive tells <code><b>FORMAT</b></code> to iterate over the elements of a list or over the implicit list of the format arguments.
+        </p>
+        <p>
+            With no modifiers, <code>~{</code> consumes one format argument, which must be a list. Like the <code>~[</code> directive, which is always paired with a <code>~]</code> directive, the <code>~{</code> directive is always paired with a closing <code>~</code>}. The text between the two markers is processed as a control string, which draws its arguments from the list consumed by the <code>~{</code> directive. <code><b>FORMAT</b></code> will repeatedly process this control string for as long as the list being iterated over has elements left. In the following example, the <code>~{</code> consumes the single format argument, the list <code>(1 2 3)</code>, and then processes the control string <code>"~a, "</code>, repeating until all the elements of the list have been consumed.
+        </p>
+        <pre>
+(format nil "~{~a, ~}" (list 1 2 3)) ==&gt; "1, 2, 3, "
+</pre>
+        <p>
+            However, it's annoying that in the output the last element of the list is followed by a comma and a space. You can fix that with the <code>~^</code> directive; within the body of a <code>~{</code> directive, the <code>~^</code> causes the iteration to stop immediately, without processing the rest of the control string, when no elements remain in the list. Thus, to avoid printing the comma and space after the last element of a list, you can precede them with a <code>~^</code>.
+        </p>
+        <pre>
+(format nil "~{~a~^, ~}" (list 1 2 3)) ==&gt; "1, 2, 3"
+</pre>
+        <p>
+            The first two times through the iteration, there are still unprocessed elements in the list when the <code>~^</code> is processed. The third time through, however, after the <code>~a</code> directive consumes the <code>3</code>, the <code>~^</code> will cause <code><b>FORMAT</b></code> to break out of the iteration without printing the comma and space.
+        </p>
+        <p>
+            With an at-sign modifier, <code>~{</code> processes the remaining format arguments as a list.
+        </p>
+        <pre>
+(format nil "~@{~a~^, ~}" 1 2 3) ==&gt; "1, 2, 3"
+</pre>
+        <p>
+            Within the body of a <code>~{...~</code>}, the special prefix parameter <code>#</code> refers to the number of items remaining to be processed in the list rather than the number of remaining format arguments. You can use that, along with the <code>~[</code> directive, to print a comma-separated list with an "and" before the last item like this:
+        </p>
+        <pre>
+(format nil "~{~a~#[~;, and ~:;, ~]~}" (list 1 2 3)) ==&gt; "1, 2, and 3"
+</pre>
+        <p>
+            However, that doesn't really work right if the list is two items long because it adds an extra comma.
+        </p>
+        <pre>
+(format nil "~{~a~#[~;, and ~:;, ~]~}" (list 1 2)) ==&gt; "1, and 2"
+</pre>
+        <p>
+            You could fix that in a bunch of ways. The following takes advantage of the behavior of <code>~@{</code> when nested inside another <code>~{</code> or <code>~@{</code> directive--it iterates over whatever items remain in the list being iterated over by the outer <code>~{</code>. You can combine that with a <code>~#[</code> directive to make the following control string for formatting lists according to English grammar:
+        </p>
+        <pre>
+(defparameter *english-list*
+  "~{~#[~;~a~;~a and ~a~:;~@{~a~#[~;, and ~:;, ~]~}~]~}")
+
+(format nil *english-list* '())        ==&gt; ""
+(format nil *english-list* '(1))       ==&gt; "1"
+(format nil *english-list* '(1 2))     ==&gt; "1 and 2"
+(format nil *english-list* '(1 2 3))   ==&gt; "1, 2, and 3"
+(format nil *english-list* '(1 2 3 4)) ==&gt; "1, 2, 3, and 4"
+</pre>
+        <p>
+            While that control string verges on being "write-only" code, it's not too hard to understand if you take it a bit at a time. The outer <code>~{...~</code>} will consume and iterate over a list. The whole body of the iteration then consists of a <code>~#[...~]</code>; the output generated each time through the iteration will thus depend on the number of items left to be processed from the list. Splitting apart the <code>~#[...~]</code> directive on the <code>~;</code> clause separators, you can see that it's made up of four clauses, the last of which is a default clause because it's preceded by a <code>~:;</code> rather than a plain <code>~;</code>. The first clause, for when there are zero elements to be processed, is empty, which makes sense--if there are no more elements to be processed, the iteration would've stopped already. The second clause handles the case of one element with a simple <code>~a</code> directive. Two elements are handled with <code>"~a and ~a"</code>. And the default clause, which handles three or more elements, consists of another iteration directive, this time using <code>~@{</code> to iterate over the remaining elements of the list being processed by the outer <code>~{</code>. And the body of that iteration is the control string that can handle a list of three or more elements correctly, which is fine in this context. Because the <code>~@{</code> loop consumes all the remaining list items, the outer loop iterates only once.
+        </p>
+        <p>
+            If you wanted to print something special such as "&lt;empty&gt;" when the list was empty, you have a couple ways to do it. Perhaps the easiest is to put the text you want into the first (zeroth) clause of the outer <code>~#[</code> and then add a colon modifier to the closing <code>~</code>} of the outer iteration--the colon forces the iteration to be run at least once, even if the list is empty, at which point <code><b>FORMAT</b></code> processes the zeroth clause of the conditional directive.
+        </p>
+        <pre>
+(defparameter *english-list*
+  "~{~#[&lt;empty&gt;~;~a~;~a and ~a~:;~@{~a~#[~;, and ~:;, ~]~}~]~:}")
+
+(format nil *english-list* '()) ==&gt; "&lt;empty&gt;"
+</pre>
+        <p>
+            Amazingly, the <code>~{</code> directive provides even more variations with different combinations of prefix parameters and modifiers. I won't discuss them other than to say you can use an integer prefix parameter to limit the maximum number of iterations and that, with a colon modifier, each element of the list (either an actual list or the list constructed by the <code>~@{</code> directive) must itself be a list whose elements will then be used as arguments to the control string in the <code>~:{...~</code>} directive.
+        </p>
+        <h2>
+            <a name="hop-skip-jump" id="hop-skip-jump">Hop, Skip, Jump</a>
+        </h2>
+        <p>
+            A much simpler directive is the <code>~*</code> directive, which allows you to jump around in the list of format arguments. In its basic form, without modifiers, it simply skips the next argument, consuming it without emitting anything. More often, however, it's used with a colon modifier, which causes it to move backward, allowing the same argument to be used a second time. For instance, you can use <code>~:*</code> to print a numeric argument once as a word and once in numerals like this:
+        </p>
+        <pre>
+(format nil "~r ~:*(~d)" 1) ==&gt; "one (1)"
+</pre>
+        <p>
+            Or you could implement a directive similar to <code>~:P</code> for an irregular plural by combing <code>~:*</code> with <code>~[</code>.
+        </p>
+        <pre>
+(format nil "I saw ~r el~:*~[ves~;f~:;ves~]." 0) ==&gt; "I saw zero elves."
+(format nil "I saw ~r el~:*~[ves~;f~:;ves~]." 1) ==&gt; "I saw one elf."
+(format nil "I saw ~r el~:*~[ves~;f~:;ves~]." 2) ==&gt; "I saw two elves."
+</pre>
+        <p>
+            In this control string, the <code>~R</code> prints the format argument as a cardinal number. Then the <code>~:*</code> directive backs up so the number is also used as the argument to the <code>~[</code> directive, selecting between the clauses for when the number is zero, one, or anything else.<sup>7</sup>
+        </p>
+        <p>
+            Within an <code>~{</code> directive, <code>~*</code> skips or backs up over the items in the list. For instance, you could print only the keys of a plist like this:
+        </p>
+        <pre>
+(format nil "~{~s~*~^ ~}" '(:a 10 :b 20)) ==&gt; ":A :B"
+</pre>
+        <p>
+            The <code>~*</code> directive can also be given a prefix parameter. With no modifiers or with the colon modifier, this parameter specifies the number of arguments to move forward or backward and defaults to one. With an at-sign modifier, the prefix parameter specifies an absolute, zero-based index of the argument to jump to, defaulting to zero. The at-sign variant of <code>~*</code> can be useful if you want to use different control strings to generate different messages for the same arguments and if different messages need to use the arguments in different orders.<sup>8</sup>
+        </p>
+        <h2>
+            <a name="and-more---" id="and-more---">And More . . .</a>
+        </h2>
+        <p>
+            And there's more--I haven't mentioned the <code>~?</code> directive, which can take snippets of control strings from the format arguments or the <code>~/</code> directive, which allows you to call an arbitrary function to handle the next format argument. And then there are all the directives for generating tabular and pretty-printed output. But the directives discussed in this chapter should be plenty for the time being.
+        </p>
+        <p>
+            In the next chapter, you'll move onto Common Lisp's condition system, the Common Lisp analog to other languages' exception and error handling systems.
+        </p>
+        <hr>
+        <div class="notes">
+            <p>
+                <sup>1</sup>Of course, most folks realize it's not worth getting that worked up over <i>anything</i> in a programming language and use it or not without a lot of angst. On the other hand, it's interesting that these two features are the two features in Common Lisp that implement what are essentially domain-specific languages using a syntax not based on s-expressions. The syntax of <code><b>FORMAT</b></code>'s control strings is character based, while the extended <code><b>LOOP</b></code> macro can be understood only in terms of the grammar of the <code><b>LOOP</b></code> keywords. That one of the common knocks on both <code><b>FORMAT</b></code> and <code><b>LOOP</b></code> is that they "aren't Lispy enough" is evidence that Lispers really do like the s-expression syntax.
+            </p>
+            <p>
+                <sup>2</sup>Readers interested in the pretty printer may want to read the paper "XP: A Common Lisp Pretty Printing System" by Richard Waters. It's a description of the pretty printer that was eventually incorporated into Common Lisp. You can download it from <code>ftp://publications.ai.mit.edu/ai-publications/pdf/AIM-1102a.pdf</code>.
+            </p>
+            <p>
+                <sup>3</sup>To slightly confuse matters, most other I/O functions also accept <code><b>T</b></code> and <code><b>NIL</b></code> as <i>stream designators</i> but with a different meaning: as a stream designator, <code><b>T</b></code> designates the bidirectional stream <code><b>*TERMINAL-IO*</b></code>, while <code><b>NIL</b></code> designates <code><b>*STANDARD-OUTPUT*</b></code> as an output stream and <code><b>*STANDARD-INPUT*</b></code> as an input stream.
+            </p>
+            <p>
+                <sup>4</sup>This variant on the <code>~C</code> directive makes more sense on platforms like the Lisp Machines where key press events were represented by Lisp characters.
+            </p>
+            <p>
+                <sup>5</sup>Technically, if the argument isn't a real number, <code>~F</code> is supposed to format it as if by the <code>~D</code> directive, which in turn behaves like the <code>~A</code> directive if the argument isn't a number, but not all implementations get this right.
+            </p>
+            <p>
+                <sup>6</sup>Well, that's what the language standard says. For some reason, perhaps rooted in a common ancestral code base, several Common Lisp implementations don't implement this aspect of the <code>~F</code> directive correctly.
+            </p>
+            <p>
+                <sup>7</sup>If you find "I saw zero elves" to be a bit clunky, you could use a slightly more elaborate format string that makes another use of <code>~:*</code> like this:
+            </p>
+            <pre>
+(format nil "I saw ~[no~:;~:*~r~] el~:*~[ves~;f~:;ves~]." 0) ==&gt; "I saw no elves."
+(format nil "I saw ~[no~:;~:*~r~] el~:*~[ves~;f~:;ves~]." 1) ==&gt; "I saw one elf."
+(format nil "I saw ~[no~:;~:*~r~] el~:*~[ves~;f~:;ves~]." 2) ==&gt; "I saw two elves."
+</pre>
+            <p>
+                <sup>8</sup>This kind of problem can arise when trying to localize an application and translate human-readable messages into different languages. <code><b>FORMAT</b></code> can help with some of these problems but is by no means a full-blown localization system.
+            </p>
+        </div>
+        <div class="copyright">
+            Copyright © 2003-2005, Peter Seibel
+        </div>
+    </body>
+</html>

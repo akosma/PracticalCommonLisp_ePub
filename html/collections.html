@@ -1,0 +1,667 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.01//EN">
+<html>
+    <head>
+        <title>
+            Collections
+        </title>
+        <link rel="stylesheet" type="text/css" href="style.css">
+    </head>
+    <body>
+        <h1>
+            11. Collections
+        </h1>
+        <p>
+            Like most programming languages, Common Lisp provides standard data types that collect multiple values into a single object. Every language slices up the collection problem a little bit differently, but the basic collection types usually boil down to an integer-indexed array type and a table type that can be used to map more or less arbitrary keys to values. The former are variously called <i>arrays</i>, <i>lists</i>, or <i>tuples</i>; the latter go by the names <i>hash tables</i>, <i>associative arrays</i>, <i>maps</i>, and <i>dictionaries</i>.
+        </p>
+        <p>
+            Lisp is, of course, famous for its list data structure, and most Lisp books, following the ontogeny-recapitulates-phylogeny principle of language instruction, start their discussion of Lisp's collections with lists. However, that approach often leads readers to the mistaken conclusion that lists are Lisp's <i>only</i> collection type. To make matters worse, because Lisp's lists are such a flexible data structure, it <i>is</i> possible to use them for many of the things arrays and hash tables are used for in other languages. But it's a mistake to focus too much on lists; while they're a crucial data structure for representing Lisp code as Lisp data, in many situations other data structures are more appropriate.
+        </p>
+        <p>
+            To keep lists from stealing the show, in this chapter I'll focus on Common Lisp's other collection types: vectors and hash tables.<sup>1</sup> However, vectors and lists share enough characteristics that Common Lisp treats them both as subtypes of a more general abstraction, the sequence. Thus, you can use many of the functions I'll discuss in this chapter with both vectors and lists.
+        </p>
+        <h2>
+            <a name="vectors" id="vectors">Vectors</a>
+        </h2>
+        <p>
+            Vectors are Common Lisp's basic integer-indexed collection, and they come in two flavors. Fixed-size vectors are a lot like arrays in a language such as Java: a thin veneer over a chunk of contiguous memory that holds the vector's elements.<sup>2</sup> Resizable vectors, on the other hand, are more like arrays in Perl or Ruby, lists in Python, or the ArrayList class in Java: they abstract the actual storage, allowing the vector to grow and shrink as elements are added and removed.
+        </p>
+        <p>
+            You can make fixed-size vectors containing specific values with the function <code><b>VECTOR</b></code>, which takes any number of arguments and returns a freshly allocated fixed-size vector containing those arguments.
+        </p>
+        <pre>
+(vector)     ==&gt; #()
+(vector 1)   ==&gt; #(1)
+(vector 1 2) ==&gt; #(1 2)
+</pre>
+        <p>
+            The <code>#(...)</code> syntax is the literal notation for vectors used by the Lisp printer and reader. This syntax allows you to save and restore vectors by <code><b>PRINT</b></code>ing them out and <code><b>READ</b></code>ing them back in. You can use the <code>#(...)</code> syntax to include literal vectors in your code, but as the effects of modifying literal objects aren't defined, you should always use <code><b>VECTOR</b></code> or the more general function <code><b>MAKE-ARRAY</b></code> to create vectors you plan to modify.
+        </p>
+        <p>
+            <code><b>MAKE-ARRAY</b></code> is more general than <code><b>VECTOR</b></code> since you can use it to create arrays of any dimensionality as well as both fixed-size and resizable vectors. The one required argument to <code><b>MAKE-ARRAY</b></code> is a list containing the dimensions of the array. Since a vector is a one-dimensional array, this list will contain one number, the size of the vector. As a convenience, <code><b>MAKE-ARRAY</b></code> will also accept a plain number in the place of a one-item list. With no other arguments, <code><b>MAKE-ARRAY</b></code> will create a vector with uninitialized elements that must be set before they can be accessed.<sup>3</sup> To create a vector with the elements all set to a particular value, you can pass an <code>:initial-element</code> argument. Thus, to make a five-element vector with its elements initialized to <code><b>NIL</b></code>, you can write the following:
+        </p>
+        <pre>
+(make-array 5 :initial-element nil) ==&gt; #(NIL NIL NIL NIL NIL)
+</pre>
+        <p>
+            <code><b>MAKE-ARRAY</b></code> is also the function to use to make a resizable vector. A resizable vector is a slightly more complicated object than a fixed-size vector; in addition to keeping track of the memory used to hold the elements and the number of slots available, a resizable vector also keeps track of the number of elements actually stored in the vector. This number is stored in the vector's <i>fill pointer</i>, so called because it's the index of the next position to be filled when you add an element to the vector.
+        </p>
+        <p>
+            To make a vector with a fill pointer, you pass <code><b>MAKE-ARRAY</b></code> a <code>:fill-pointer</code> argument. For instance, the following call to <code><b>MAKE-ARRAY</b></code> makes a vector with room for five elements; but it looks empty because the fill pointer is zero:
+        </p>
+        <pre>
+(make-array 5 :fill-pointer 0) ==&gt; #()
+</pre>
+        <p>
+            To add an element to the end of a resizable vector, you can use the function <code><b>VECTOR-PUSH</b></code>. It adds the element at the current value of the fill pointer and then increments the fill pointer by one, returning the index where the new element was added. The function <code><b>VECTOR-POP</b></code> returns the most recently pushed item, decrementing the fill pointer in the process.
+        </p>
+        <pre>
+(defparameter *x* (make-array 5 :fill-pointer 0))
+
+(vector-push 'a *x*) ==&gt; 0
+*x*                  ==&gt; #(A)
+(vector-push 'b *x*) ==&gt; 1
+*x*                  ==&gt; #(A B)
+(vector-push 'c *x*) ==&gt; 2
+*x*                  ==&gt; #(A B C)
+(vector-pop *x*)     ==&gt; C
+*x*                  ==&gt; #(A B)
+(vector-pop *x*)     ==&gt; B
+*x*                  ==&gt; #(A)
+(vector-pop *x*)     ==&gt; A
+*x*                  ==&gt; #()
+</pre>
+        <p>
+            However, even a vector with a fill pointer isn't completely resizable. The vector <code>*x*</code> can hold at most five elements. To make an arbitrarily resizable vector, you need to pass <code><b>MAKE-ARRAY</b></code> another keyword argument: <code>:adjustable</code>.
+        </p>
+        <pre>
+(make-array 5 :fill-pointer 0 :adjustable t) ==&gt; #()
+</pre>
+        <p>
+            This call makes an <i>adjustable</i> vector whose underlying memory can be resized as needed. To add elements to an adjustable vector, you use <code><b>VECTOR-PUSH-EXTEND</b></code>, which works just like <code><b>VECTOR-PUSH</b></code> except it will automatically expand the array if you try to push an element onto a full vector--one whose fill pointer is equal to the size of the underlying storage.<sup>4</sup>
+        </p>
+        <h2>
+            <a name="subtypes-of-vector" id="subtypes-of-vector">Subtypes of Vector</a>
+        </h2>
+        <p>
+            All the vectors you've dealt with so far have been <i>general</i> vectors that can hold any type of object. It's also possible to create <i>specialized</i> vectors that are restricted to holding certain types of elements. One reason to use specialized vectors is they may be stored more compactly and can provide slightly faster access to their elements than general vectors. However, for the moment let's focus on a couple kinds of specialized vectors that are important data types in their own right.
+        </p>
+        <p>
+            One of these you've seen already--strings are vectors specialized to hold characters. Strings are important enough to get their own read/print syntax (double quotes) and the set of string-specific functions I discussed in the previous chapter. But because they're also vectors, all the functions I'll discuss in the next few sections that take vector arguments can also be used with strings. These functions will fill out the string library with functions for things such as searching a string for a substring, finding occurrences of a character within a string, and more.
+        </p>
+        <p>
+            Literal strings, such as <code>"foo"</code>, are like literal vectors written with the <code>#()</code> syntax--their size is fixed, and they must not be modified. However, you can use <code><b>MAKE-ARRAY</b></code> to make resizable strings by adding another keyword argument, <code>:element-type</code>. This argument takes a <i>type</i> descriptor. I won't discuss all the possible type descriptors you can use here; for now it's enough to know you can create a string by passing the symbol <code><b>CHARACTER</b></code> as the <code>:element-type</code> argument. Note that you need to quote the symbol to prevent it from being treated as a variable name. For example, to make an initially empty but resizable string, you can write this:
+        </p>
+        <pre>
+(make-array 5 :fill-pointer 0 :adjustable t :element-type 'character)  ""
+</pre>
+        <p>
+            Bit vectors--vectors whose elements are all zeros or ones--also get some special treatment. They have a special read/print syntax that looks like <code>#*00001111</code> and a fairly large library of functions, which I won't discuss, for performing bit-twiddling operations such as "anding" together two bit arrays. The type descriptor to pass as the <code>:element-type</code> to create a bit vector is the symbol <code><b>BIT</b></code>.
+        </p>
+        <h2>
+            <a name="vectors-as-sequences" id="vectors-as-sequences">Vectors As Sequences</a>
+        </h2>
+        <p>
+            As mentioned earlier, vectors and lists are the two concrete subtypes of the abstract type <i>sequence</i>. All the functions I'll discuss in the next few sections are sequence functions; in addition to being applicable to vectors--both general and specialized--they can also be used with lists.
+        </p>
+        <p>
+            The two most basic sequence functions are <code><b>LENGTH</b></code>, which returns the length of a sequence, and <code><b>ELT</b></code>, which allows you to access individual elements via an integer index. <code><b>LENGTH</b></code> takes a sequence as its only argument and returns the number of elements it contains. For vectors with a fill pointer, this will be the value of the fill pointer. <code><b>ELT</b></code>, short for <i>element</i>, takes a sequence and an integer index between zero (inclusive) and the length of the sequence (exclusive) and returns the corresponding element. <code><b>ELT</b></code> will signal an error if the index is out of bounds. Like <code><b>LENGTH</b></code>, <code><b>ELT</b></code> treats a vector with a fill pointer as having the length specified by the fill pointer.
+        </p>
+        <pre>
+(defparameter *x* (vector 1 2 3))
+
+(length *x*) ==&gt; 3
+(elt *x* 0)  ==&gt; 1
+(elt *x* 1)  ==&gt; 2
+(elt *x* 2)  ==&gt; 3
+(elt *x* 3)  ==&gt; <i>error</i>
+</pre>
+        <p>
+            <code><b>ELT</b></code> is also a <code><b>SETF</b></code>able place, so you can set the value of a particular element like this:
+        </p>
+        <pre>
+(setf (elt *x* 0) 10)
+
+*x* ==&gt; #(10 2 3)
+</pre>
+        <h2>
+            <a name="sequence-iterating-functions" id="sequence-iterating-functions">Sequence Iterating Functions</a>
+        </h2>
+        <p>
+            While in theory all operations on sequences boil down to some combination of <code><b>LENGTH</b></code>, <code><b>ELT</b></code>, and <code><b>SETF</b></code> of <code><b>ELT</b></code> operations, Common Lisp provides a large library of sequence functions.
+        </p>
+        <p>
+            One group of sequence functions allows you to express certain operations on sequences such as finding or filtering specific elements without writing explicit loops. Table 11-1 summarizes them.
+        </p>
+        <div class="table-caption">
+            Table 11-1.Basic Sequence Functions
+        </div>
+        <table class="book-table">
+            <tr>
+                <td>
+                    Name
+                </td>
+                <td>
+                    Required Arguments
+                </td>
+                <td>
+                    Returns
+                </td>
+            </tr>
+            <tr>
+                <td>
+                    <code><b>COUNT</b></code>
+                </td>
+                <td>
+                    Item and sequence
+                </td>
+                <td>
+                    Number of times item appears in sequence
+                </td>
+            </tr>
+            <tr>
+                <td>
+                    <code><b>FIND</b></code>
+                </td>
+                <td>
+                    Item and sequence
+                </td>
+                <td>
+                    Item or <code><b>NIL</b></code>
+                </td>
+            </tr>
+            <tr>
+                <td>
+                    <code><b>POSITION</b></code>
+                </td>
+                <td>
+                    Item and sequence
+                </td>
+                <td>
+                    Index into sequence or <code><b>NIL</b></code>
+                </td>
+            </tr>
+            <tr>
+                <td>
+                    <code><b>REMOVE</b></code>
+                </td>
+                <td>
+                    Item and sequence
+                </td>
+                <td>
+                    Sequence with instances of item removed
+                </td>
+            </tr>
+            <tr>
+                <td>
+                    <code><b>SUBSTITUTE</b></code>
+                </td>
+                <td>
+                    New item, item, and sequence
+                </td>
+                <td>
+                    Sequence with instances of item replaced with new item
+                </td>
+            </tr>
+        </table>
+        <p>
+            Here are some simple examples of how to use these functions:
+        </p>
+        <pre>
+(count 1 #(1 2 1 2 3 1 2 3 4))         ==&gt; 3
+(remove 1 #(1 2 1 2 3 1 2 3 4))        ==&gt; #(2 2 3 2 3 4)
+(remove 1 '(1 2 1 2 3 1 2 3 4))        ==&gt; (2 2 3 2 3 4)
+(remove #\a "foobarbaz")               ==&gt; "foobrbz"
+(substitute 10 1 #(1 2 1 2 3 1 2 3 4)) ==&gt; #(10 2 10 2 3 10 2 3 4)
+(substitute 10 1 '(1 2 1 2 3 1 2 3 4)) ==&gt; (10 2 10 2 3 10 2 3 4)
+(substitute #\x #\b "foobarbaz")       ==&gt; "fooxarxaz"
+(find 1 #(1 2 1 2 3 1 2 3 4))          ==&gt; 1
+(find 10 #(1 2 1 2 3 1 2 3 4))         ==&gt; NIL
+(position 1 #(1 2 1 2 3 1 2 3 4))      ==&gt; 0
+</pre>
+        <p>
+            Note how <code><b>REMOVE</b></code> and <code><b>SUBSTITUTE</b></code> always return a sequence of the same type as their sequence argument.
+        </p>
+        <p>
+            You can modify the behavior of these five functions in a variety of ways using keyword arguments. For instance, these functions, by default, look for elements in the sequence that are the same object as the item argument. You can change this in two ways: First, you can use the <code>:test</code> keyword to pass a function that accepts two arguments and returns a boolean. If provided, it will be used to compare <i>item</i> to each element instead of the default object equality test, <code><b>EQL</b></code>.<sup>5</sup> Second, with the <code>:key</code> keyword you can pass a one-argument function to be called on each element of the sequence to extract a <i>key</i> value, which will then be compared to the item in the place of the element itself. Note, however, that functions such as <code><b>FIND</b></code> that return elements of the sequence continue to return the actual element, not just the extracted key.
+        </p>
+        <pre>
+(count "foo" #("foo" "bar" "baz") :test #'string=)    ==&gt; 1
+(find 'c #((a 10) (b 20) (c 30) (d 40)) :key #'first) ==&gt; (C 30)
+</pre>
+        <p>
+            To limit the effects of these functions to a particular subsequence of the sequence argument, you can provide bounding indices with <code>:start</code> and <code>:end</code> arguments. Passing <code><b>NIL</b></code> for <code>:end</code> or omitting it is the same as specifying the length of the sequence.<sup>6</sup>
+        </p>
+        <p>
+            If a non-<code><b>NIL</b></code> <code>:from-end</code> argument is provided, then the elements of the sequence will be examined in reverse order. By itself <code>:from-end</code> can affect the results of only <code><b>FIND</b></code> and <code><b>POSITION</b></code>. For instance:
+        </p>
+        <pre>
+(find 'a #((a 10) (b 20) (a 30) (b 40)) :key #'first)             ==&gt; (A 10)
+(find 'a #((a 10) (b 20) (a 30) (b 40)) :key #'first :from-end t) ==&gt; (A 30)
+</pre>
+        <p>
+            However, the <code>:from-end</code> argument can affect <code><b>REMOVE</b></code> and <code><b>SUBSTITUTE</b></code> in conjunction with another keyword parameter, <code>:count</code>, that's used to specify how many elements to remove or substitute. If you specify a <code>:count</code> lower than the number of matching elements, then it obviously matters which end you start from:
+        </p>
+        <pre>
+(remove #\a "foobarbaz" :count 1)             ==&gt; "foobrbaz"
+(remove #\a "foobarbaz" :count 1 :from-end t) ==&gt; "foobarbz"
+</pre>
+        <p>
+            And while <code>:from-end</code> can't change the results of the <code><b>COUNT</b></code> function, it does affect the order the elements are passed to any <code>:test</code> and <code>:key</code> functions, which could possibly have side effects. For example:
+        </p>
+        <pre>
+CL-USER&gt; (defparameter *v* #((a 10) (b 20) (a 30) (b 40)))
+*V*
+CL-USER&gt; (defun verbose-first (x) (format t "Looking at ~s~%" x) (first x))
+VERBOSE-FIRST
+CL-USER&gt; (count 'a *v* :key #'verbose-first)
+Looking at (A 10)
+Looking at (B 20)
+Looking at (A 30)
+Looking at (B 40)
+2
+CL-USER&gt; (count 'a *v* :key #'verbose-first :from-end t)
+Looking at (B 40)
+Looking at (A 30)
+Looking at (B 20)
+Looking at (A 10)
+2
+</pre>
+        <p>
+            Table 11-2 summarizes these arguments.
+        </p>
+        <div class="table-caption">
+            Table 11-2. Standard Sequence Function Keyword Arguments
+        </div>
+        <table class="book-table">
+            <tr>
+                <td>
+                    Argument
+                </td>
+                <td>
+                    Meaning
+                </td>
+                <td>
+                    Default
+                </td>
+            </tr>
+            <tr>
+                <td>
+                    <code>:test</code>
+                </td>
+                <td>
+                    Two-argument function used to compare item (or value extracted by <code>:key</code> function) to element.
+                </td>
+                <td>
+                    <code><b>EQL</b></code>
+                </td>
+            </tr>
+            <tr>
+                <td>
+                    <code>:key</code>
+                </td>
+                <td>
+                    One-argument function to extract key value from actual sequence element. <code><b>NIL</b></code> means use element as is.
+                </td>
+                <td>
+                    <code><b>NIL</b></code>
+                </td>
+            </tr>
+            <tr>
+                <td>
+                    <code>:start</code>
+                </td>
+                <td>
+                    Starting index (inclusive) of subsequence.
+                </td>
+                <td>
+                    0
+                </td>
+            </tr>
+            <tr>
+                <td>
+                    <code>:end</code>
+                </td>
+                <td>
+                    Ending index (exclusive) of subsequence. <code><b>NIL</b></code> indicates end of sequence.
+                </td>
+                <td>
+                    <code><b>NIL</b></code>
+                </td>
+            </tr>
+            <tr>
+                <td>
+                    <code>:from-end</code>
+                </td>
+                <td>
+                    If true, the sequence will be traversed in reverse order, from end to start.
+                </td>
+                <td>
+                    <code><b>NIL</b></code>
+                </td>
+            </tr>
+            <tr>
+                <td>
+                    <code>:count</code>
+                </td>
+                <td>
+                    Number indicating the number of elements to remove or substitute or <code><b>NIL</b></code> to indicate all (<code><b>REMOVE</b></code> and <code><b>SUBSTITUTE</b></code> only).
+                </td>
+                <td>
+                    <code><b>NIL</b></code>
+                </td>
+            </tr>
+        </table>
+        <h2>
+            <a name="higher-order-function-variants" id="higher-order-function-variants">Higher-Order Function Variants</a>
+        </h2>
+        <p>
+            For each of the functions just discussed, Common Lisp provides two <i>higher-order function</i> variants that, in the place of the item argument, take a function to be called on each element of the sequence. One set of variants are named the same as the basic function with an <code>-IF</code> appended. These functions count, find, remove, and substitute elements of the sequence for which the function argument returns true. The other set of variants are named with an <code>-IF-NOT</code> suffix and count, find, remove, and substitute elements for which the function argument does <i>not</i> return true.
+        </p>
+        <pre>
+(count-if #'evenp #(1 2 3 4 5))         ==&gt; 2
+
+(count-if-not #'evenp #(1 2 3 4 5))     ==&gt; 3
+
+(position-if #'digit-char-p "abcd0001") ==&gt; 4
+
+(remove-if-not #'(lambda (x) (char= (elt x 0) #\f))
+  #("foo" "bar" "baz" "foom")) ==&gt; #("foo" "foom")
+</pre>
+        <p>
+            According to the language standard, the <code><b>-IF-NOT</b></code> variants are deprecated. However, that deprecation is generally considered to have itself been ill-advised. If the standard is ever revised, it's more likely the deprecation will be removed than the <code><b>-IF-NOT</b></code> functions. For one thing, the <code><b>REMOVE-IF-NOT</b></code> variant is probably used more often than <code><b>REMOVE-IF</b></code>. Despite its negative-sounding name, <code><b>REMOVE-IF-NOT</b></code> is actually the positive variant--it returns the elements that <i>do</i> satisfy the predicate. <sup>7</sup>
+        </p>
+        <p>
+            The <code>-IF</code> and <code>-IF-NOT</code> variants accept all the same keyword arguments as their vanilla counterparts except for <code>:test</code>, which isn't needed since the main argument is already a function.<sup>8</sup> With a <code>:key</code> argument, the value extracted by the <code>:key</code> function is passed to the function instead of the actual element.
+        </p>
+        <pre>
+(count-if #'evenp #((1 a) (2 b) (3 c) (4 d) (5 e)) :key #'first)     ==&gt; 2
+
+(count-if-not #'evenp #((1 a) (2 b) (3 c) (4 d) (5 e)) :key #'first) ==&gt; 3
+
+(remove-if-not #'alpha-char-p
+  #("foo" "bar" "1baz") :key #'(lambda (x) (elt x 0))) ==&gt; #("foo" "bar")
+</pre>
+        <p>
+            The <code><b>REMOVE</b></code> family of functions also support a fourth variant, <code><b>REMOVE-DUPLICATES</b></code>, that has only one required argument, a sequence, from which it removes all but one instance of each duplicated element. It takes the same keyword arguments as <code><b>REMOVE</b></code>, except for <code>:count</code>, since it always removes all duplicates.
+        </p>
+        <pre>
+(remove-duplicates #(1 2 1 2 3 1 2 3 4)) ==&gt; #(1 2 3 4)
+</pre>
+        <h2>
+            <a name="whole-sequence-manipulations" id="whole-sequence-manipulations">Whole Sequence Manipulations</a>
+        </h2>
+        <p>
+            A handful of functions perform operations on a whole sequence (or sequences) at a time. These tend to be simpler than the other functions I've described so far. For instance, <code><b>COPY-SEQ</b></code> and <code><b>REVERSE</b></code> each take a single argument, a sequence, and each returns a new sequence of the same type. The sequence returned by <code><b>COPY-SEQ</b></code> contains the same elements as its argument while the sequence returned by <code><b>REVERSE</b></code> contains the same elements but in reverse order. Note that neither function copies the elements themselves--only the returned sequence is a new object.
+        </p>
+        <p>
+            The <code><b>CONCATENATE</b></code> function creates a new sequence containing the concatenation of any number of sequences. However, unlike <code><b>REVERSE</b></code> and <code><b>COPY-SEQ</b></code>, which simply return a sequence of the same type as their single argument, <code><b>CONCATENATE</b></code> must be told explicitly what kind of sequence to produce in case the arguments are of different types. Its first argument is a type descriptor, like the <code>:element-type</code> argument to <code><b>MAKE-ARRAY</b></code>. In this case, the type descriptors you'll most likely use are the symbols <code><b>VECTOR</b></code>, <code><b>LIST</b></code>, or <code><b>STRING</b></code>.<sup>9</sup> For example:
+        </p>
+        <pre>
+(concatenate 'vector #(1 2 3) '(4 5 6))    ==&gt; #(1 2 3 4 5 6)
+(concatenate 'list #(1 2 3) '(4 5 6))      ==&gt; (1 2 3 4 5 6)
+(concatenate 'string "abc" '(#\d #\e #\f)) ==&gt; "abcdef"
+</pre>
+        <h2>
+            <a name="sorting-and-merging" id="sorting-and-merging">Sorting and Merging</a>
+        </h2>
+        <p>
+            The functions <code><b>SORT</b></code> and <code><b>STABLE-SORT</b></code> provide two ways of sorting a sequence. They both take a sequence and a two-argument predicate and return a sorted version of the sequence.
+        </p>
+        <pre>
+(sort (vector "foo" "bar" "baz") #'string&lt;) ==&gt; #("bar" "baz" "foo")
+</pre>
+        <p>
+            The difference is that <code><b>STABLE-SORT</b></code> is guaranteed to not reorder any elements considered equivalent by the predicate while <code><b>SORT</b></code> guarantees only that the result is sorted and may reorder equivalent elements.
+        </p>
+        <p>
+            Both these functions are examples of what are called <i>destructive</i> functions. Destructive functions are allowed--typically for reasons of efficiency--to modify their arguments in more or less arbitrary ways. This has two implications: one, you should always do something with the return value of these functions (such as assign it to a variable or pass it to another function), and, two, unless you're done with the object you're passing to the destructive function, you should pass a copy instead. I'll say more about destructive functions in the next chapter.
+        </p>
+        <p>
+            Typically you won't care about the unsorted version of a sequence after you've sorted it, so it makes sense to allow <code><b>SORT</b></code> and <code><b>STABLE-SORT</b></code> to destroy the sequence in the course of sorting it. But it does mean you need to remember to write the following:<sup>10</sup>
+        </p>
+        <pre>
+(setf my-sequence (sort my-sequence #'string&lt;))
+</pre>
+        <p>
+            rather than just this:
+        </p>
+        <pre>
+(sort my-sequence #'string&lt;)
+</pre>
+        <p>
+            Both these functions also take a keyword argument, <code>:key</code>, which, like the <code>:key</code> argument in other sequence functions, should be a function and will be used to extract the values to be passed to the sorting predicate in the place of the actual elements. The extracted keys are used only to determine the ordering of elements; the sequence returned will contain the actual elements of the argument sequence.
+        </p>
+        <p>
+            The <code><b>MERGE</b></code> function takes two sequences and a predicate and returns a sequence produced by merging the two sequences, according to the predicate. It's related to the two sorting functions in that if each sequence is already sorted by the same predicate, then the sequence returned by <code><b>MERGE</b></code> will also be sorted. Like the sorting functions, <code><b>MERGE</b></code> takes a <code>:key</code> argument. Like <code><b>CONCATENATE</b></code>, and for the same reason, the first argument to <code><b>MERGE</b></code> must be a type descriptor specifying the type of sequence to produce.
+        </p>
+        <pre>
+(merge 'vector #(1 3 5) #(2 4 6) #'&lt;) ==&gt; #(1 2 3 4 5 6)
+(merge 'list #(1 3 5) #(2 4 6) #'&lt;)   ==&gt; (1 2 3 4 5 6)
+</pre>
+        <h2>
+            <a name="subsequence-manipulations" id="subsequence-manipulations">Subsequence Manipulations</a>
+        </h2>
+        <p>
+            Another set of functions allows you to manipulate subsequences of existing sequences. The most basic of these is <code><b>SUBSEQ</b></code>, which extracts a subsequence starting at a particular index and continuing to a particular ending index or the end of the sequence. For instance:
+        </p>
+        <pre>
+(subseq "foobarbaz" 3)   ==&gt; "barbaz"
+(subseq "foobarbaz" 3 6) ==&gt; "bar"
+</pre>
+        <p>
+            <code><b>SUBSEQ</b></code> is also <code><b>SETF</b></code>able, but it won't extend or shrink a sequence; if the new value and the subsequence to be replaced are different lengths, the shorter of the two determines how many characters are actually changed.
+        </p>
+        <pre>
+(defparameter *x* (copy-seq "foobarbaz"))
+
+(setf (subseq *x* 3 6) "xxx")  ; subsequence and new value are same length
+*x* ==&gt; "fooxxxbaz"
+
+(setf (subseq *x* 3 6) "abcd") ; new value too long, extra character ignored.
+*x* ==&gt; "fooabcbaz"
+
+(setf (subseq *x* 3 6) "xx")   ; new value too short, only two characters changed
+*x* ==&gt; "fooxxcbaz"
+</pre>
+        <p>
+            You can use the <code><b>FILL</b></code> function to set multiple elements of a sequence to a single value. The required arguments are a sequence and the value with which to fill it. By default every element of the sequence is set to the value; <code>:start</code> and <code>:end</code> keyword arguments can limit the effects to a given subsequence.
+        </p>
+        <p>
+            If you need to find a subsequence within a sequence, the <code><b>SEARCH</b></code> function works like <code><b>POSITION</b></code> except the first argument is a sequence rather than a single item.
+        </p>
+        <pre>
+(position #\b "foobarbaz") ==&gt; 3
+(search "bar" "foobarbaz") ==&gt; 3
+</pre>
+        <p>
+            On the other hand, to find where two sequences with a common prefix first diverge, you can use the <code><b>MISMATCH</b></code> function. It takes two sequences and returns the index of the first pair of mismatched elements.
+        </p>
+        <pre>
+(mismatch "foobarbaz" "foom") ==&gt; 3
+</pre>
+        <p>
+            It returns <code><b>NIL</b></code> if the strings match. <code><b>MISMATCH</b></code> also takes many of the standard keyword arguments: a <code>:key</code> argument for specifying a function to use to extract the values to be compared; a <code>:test</code> argument to specify the comparison function; and <code>:start1</code>, <code>:end1</code>, <code>:start2</code>, and <code>:end2</code> arguments to specify subsequences within the two sequences. And a <code>:from-end</code> argument of <code><b>T</b></code> specifies the sequences should be searched in reverse order, causing <code><b>MISMATCH</b></code> to return the index, in the first sequence, where whatever common suffix the two sequences share begins.
+        </p>
+        <pre>
+(mismatch "foobar" "bar" :from-end t) ==&gt; 3
+</pre>
+        <h2>
+            <a name="sequence-predicates" id="sequence-predicates">Sequence Predicates</a>
+        </h2>
+        <p>
+            Four other handy functions are <code><b>EVERY</b></code>, <code><b>SOME</b></code>, <code><b>NOTANY</b></code>, and <code><b>NOTEVERY</b></code>, which iterate over sequences testing a boolean predicate. The first argument to all these functions is the predicate, and the remaining arguments are sequences. The predicate should take as many arguments as the number of sequences passed. The elements of the sequences are passed to the predicate--one element from each sequence--until one of the sequences runs out of elements or the overall termination test is met: <code><b>EVERY</b></code> terminates, returning false, as soon as the predicate fails. If the predicate is always satisfied, it returns true. <code><b>SOME</b></code> returns the first non-<code><b>NIL</b></code> value returned by the predicate or returns false if the predicate is never satisfied. <code><b>NOTANY</b></code> returns false as soon as the predicate is satisfied or true if it never is. And <code><b>NOTEVERY</b></code> returns true as soon as the predicate fails or false if the predicate is always satisfied. Here are some examples of testing just one sequence:
+        </p>
+        <pre>
+(every #'evenp #(1 2 3 4 5))    ==&gt; NIL
+(some #'evenp #(1 2 3 4 5))     ==&gt; T
+(notany #'evenp #(1 2 3 4 5))   ==&gt; NIL
+(notevery #'evenp #(1 2 3 4 5)) ==&gt; T
+</pre>
+        <p>
+            These calls compare elements of two sequences pairwise:
+        </p>
+        <pre>
+(every #'&gt; #(1 2 3 4) #(5 4 3 2))    ==&gt; NIL
+(some #'&gt; #(1 2 3 4) #(5 4 3 2))     ==&gt; T
+(notany #'&gt; #(1 2 3 4) #(5 4 3 2))   ==&gt; NIL
+(notevery #'&gt; #(1 2 3 4) #(5 4 3 2)) ==&gt; T
+</pre>
+        <h2>
+            <a name="sequence-mapping-functions" id="sequence-mapping-functions">Sequence Mapping Functions</a>
+        </h2>
+        <p>
+            Finally, the last of the sequence functions are the generic mapping functions. <code><b>MAP</b></code>, like the sequence predicate functions, takes a <i>n</i>-argument function and <i>n</i> sequences. But instead of a boolean value, <code><b>MAP</b></code> returns a new sequence containing the result of applying the function to subsequent elements of the sequences. Like <code><b>CONCATENATE</b></code> and <code><b>MERGE</b></code>, <code><b>MAP</b></code> needs to be told what kind of sequence to create.
+        </p>
+        <pre>
+(map 'vector #'* #(1 2 3 4 5) #(10 9 8 7 6)) ==&gt; #(10 18 24 28 30)
+</pre>
+        <p>
+            <code><b>MAP-INTO</b></code> is like <code><b>MAP</b></code> except instead of producing a new sequence of a given type, it places the results into a sequence passed as the first argument. This sequence can be the same as one of the sequences providing values for the function. For instance, to sum several vectors--<code>a</code>, <code>b</code>, and <code>c</code>--into one, you could write this:
+        </p>
+        <pre>
+(map-into a #'+ a b c)
+</pre>
+        <p>
+            If the sequences are different lengths, <code><b>MAP-INTO</b></code> affects only as many elements as are present in the shortest sequence, including the sequence being mapped into. However, if the sequence being mapped into is a vector with a fill pointer, the number of elements affected isn't limited by the fill pointer but rather by the actual size of the vector. After a call to <code><b>MAP-INTO</b></code>, the fill pointer will be set to the number of elements mapped. <code><b>MAP-INTO</b></code> won't, however, extend an adjustable vector.
+        </p>
+        <p>
+            The last sequence function is <code><b>REDUCE</b></code>, which does another kind of mapping: it maps over a single sequence, applying a two-argument function first to the first two elements of the sequence and then to the value returned by the function and subsequent elements of the sequence. Thus, the following expression sums the numbers from one to ten:
+        </p>
+        <pre>
+(reduce #'+ #(1 2 3 4 5 6 7 8 9 10)) ==&gt; 55
+</pre>
+        <p>
+            <code><b>REDUCE</b></code> is a surprisingly useful function--whenever you need to distill a sequence down to a single value, chances are you can write it with <code><b>REDUCE</b></code>, and it will often be quite a concise way to express what you want. For instance, to find the maximum value in a sequence of numbers, you can write <code>(reduce #'max numbers)</code>. <code><b>REDUCE</b></code> also takes a full complement of keyword arguments (<code>:key</code>, <code>:from-end</code>, <code>:start</code>, and <code>:end</code>) and one unique to <code><b>REDUCE</b></code> (<code>:initial-value</code>). The latter specifies a value that's logically placed before the first element of the sequence (or after the last if you also specify a true <code>:from-end</code> argument).
+        </p>
+        <h2>
+            <a name="hash-tables" id="hash-tables">Hash Tables</a>
+        </h2>
+        <p>
+            The other general-purpose collection provided by Common Lisp is the hash table. Where vectors provide an integer-indexed data structure, hash tables allow you to use arbitrary objects as the indexes, or keys. When you add a value to a hash table, you store it under a particular key. Later you can use the same key to retrieve the value. Or you can associate a new value with the same key--each key maps to a single value.
+        </p>
+        <p>
+            With no arguments <code><b>MAKE-HASH-TABLE</b></code> makes a hash table that considers two keys equivalent if they're the same object according to <code><b>EQL</b></code>. This is a good default unless you want to use strings as keys, since two strings with the same contents aren't necessarily <code><b>EQL</b></code>. In that case you'll want a so-called <code><b>EQUAL</b></code> hash table, which you can get by passing the symbol <code><b>EQUAL</b></code> as the <code>:test</code> keyword argument to <code><b>MAKE-HASH-TABLE</b></code>. Two other possible values for the <code>:test</code> argument are the symbols <code><b>EQ</b></code> and <code><b>EQUALP</b></code>. These are, of course, the names of the standard object comparison functions, which I discussed in Chapter 4. However, unlike the <code>:test</code> argument passed to sequence functions, <code><b>MAKE-HASH-TABLE</b></code>'s <code>:test</code> can't be used to specify an arbitrary function--only the values <code><b>EQ</b></code>, <code><b>EQL</b></code>, <code><b>EQUAL</b></code>, and <code><b>EQUALP</b></code>. This is because hash tables actually need two functions, an equivalence function and a <i>hash</i> function that computes a numerical hash code from the key in a way compatible with how the equivalence function will ultimately compare two keys. However, although the language standard provides only for hash tables that use the standard equivalence functions, most implementations provide some mechanism for defining custom hash tables.
+        </p>
+        <p>
+            The <code><b>GETHASH</b></code> function provides access to the elements of a hash table. It takes two arguments--a key and the hash table--and returns the value, if any, stored in the hash table under that key or <code><b>NIL</b></code>.<sup>11</sup> For example:
+        </p>
+        <pre>
+(defparameter *h* (make-hash-table))
+
+(gethash 'foo *h*) ==&gt; NIL
+
+(setf (gethash 'foo *h*) 'quux)
+
+(gethash 'foo *h*) ==&gt; QUUX
+</pre>
+        <p>
+            Since <code><b>GETHASH</b></code> returns <code><b>NIL</b></code> if the key isn't present in the table, there's no way to tell from the return value the difference between a key not being in a hash table at all and being in the table with the value <code><b>NIL</b></code>. <code><b>GETHASH</b></code> solves this problem with a feature I haven't discussed yet--multiple return values. <code><b>GETHASH</b></code> actually returns two values; the primary value is the value stored under the given key or <code><b>NIL</b></code>. The secondary value is a boolean indicating whether the key is present in the hash table. Because of the way multiple values work, the extra return value is silently discarded unless the caller explicitly handles it with a form that can "see" multiple values.
+        </p>
+        <p>
+            I'll discuss multiple return values in greater detail in Chapter 20, but for now I'll give you a sneak preview of how to use the <code><b>MULTIPLE-VALUE-BIND</b></code> macro to take advantage of <code><b>GETHASH</b></code>'s extra return value. <code><b>MULTIPLE-VALUE-BIND</b></code> creates variable bindings like <code><b>LET</b></code> does, filling them with the multiple values returned by a form.
+        </p>
+        <p>
+            The following function shows how you might use <code><b>MULTIPLE-VALUE-BIND</b></code>; the variables it binds are <code>value</code> and <code>present</code>:
+        </p>
+        <pre>
+(defun show-value (key hash-table)
+  (multiple-value-bind (value present) (gethash key hash-table)
+    (if present
+      (format nil "Value ~a actually present." value)
+      (format nil "Value ~a because key not found." value))))
+
+(setf (gethash 'bar *h*) nil) ; provide an explicit value of <code><b>NIL</b></code>
+
+(show-value 'foo *h*) ==&gt; "Value QUUX actually present."
+(show-value 'bar *h*) ==&gt; "Value NIL actually present."
+(show-value 'baz *h*) ==&gt; "Value NIL because key not found."
+</pre>
+        <p>
+            Since setting the value under a key to <code><b>NIL</b></code> leaves the key in the table, you'll need another function to completely remove a key/value pair. <code><b>REMHASH</b></code> takes the same arguments as <code><b>GETHASH</b></code> and removes the specified entry. You can also completely clear a hash table of all its key/value pairs with <code><b>CLRHASH</b></code>.
+        </p>
+        <h2>
+            <a name="hash-table-iteration" id="hash-table-iteration">Hash Table Iteration</a>
+        </h2>
+        <p>
+            Common Lisp provides a couple ways to iterate over the entries in a hash table. The simplest of these is via the function <code><b>MAPHASH</b></code>. Analogous to the <code><b>MAP</b></code> function, <code><b>MAPHASH</b></code> takes a two-argument function and a hash table and invokes the function once for each key/value pair in the hash table. For instance, to print all the key/value pairs in a hash table, you could use <code><b>MAPHASH</b></code> like this:
+        </p>
+        <pre>
+(maphash #'(lambda (k v) (format t "~a =&gt; ~a~%" k v)) *h*)
+</pre>
+        <p>
+            The consequences of adding or removing elements from a hash table while iterating over it aren't specified (and are likely to be bad) with two exceptions: you can use <code><b>SETF</b></code> with <code><b>GETHASH</b></code> to change the value of the current entry, and you can use <code><b>REMHASH</b></code> to remove the current entry. For instance, to remove all the entries whose value is less than ten, you could write this:
+        </p>
+        <pre>
+(maphash #'(lambda (k v) (when (&lt; v 10) (remhash k *h*))) *h*)
+</pre>
+        <p>
+            The other way to iterate over a hash table is with the extended <code><b>LOOP</b></code> macro, which I'll discuss in Chapter 22.<sup>12</sup> The <code><b>LOOP</b></code> equivalent of the first <code><b>MAPHASH</b></code> expression would look like this:
+        </p>
+        <pre>
+(loop for k being the hash-keys in *h* using (hash-value v)
+  do (format t "~a =&gt; ~a~%" k v))
+</pre>
+        <p>
+            I could say a lot more about the nonlist collections supported by Common Lisp. For instance, I haven't discussed multidimensional arrays at all or the library of functions for manipulating bit arrays. However, what I've covered in this chapter should suffice for most of your general-purpose programming needs. Now it's finally time to look at Lisp's eponymous data structure: lists.
+        </p>
+        <hr>
+        <div class="notes">
+            <p>
+                <sup>1</sup>Once you're familiar with all the data types Common Lisp offers, you'll also see that lists can be useful for prototyping data structures that will later be replaced with something more efficient once it becomes clear how exactly the data is to be used.
+            </p>
+            <p>
+                <sup>2</sup>Vectors are called <i>vectors</i>, not <i>arrays</i> as their analogs in other languages are, because Common Lisp supports true multidimensional arrays. It's equally correct, though more cumbersome, to refer to them as <i>one-dimensional arrays</i>.
+            </p>
+            <p>
+                <sup>3</sup>Array elements "must" be set before they're accessed in the sense that the behavior is undefined; Lisp won't necessarily stop you.
+            </p>
+            <p>
+                <sup>4</sup>While frequently used together, the <code>:fill-pointer</code> and <code>:adjustable</code> arguments are independent--you can make an adjustable array without a fill pointer. However, you can use <code><b>VECTOR-PUSH</b></code> and <code><b>VECTOR-POP</b></code> only with vectors that have a fill pointer and <code><b>VECTOR-PUSH-EXTEND</b></code> only with vectors that have a fill pointer and are adjustable. You can also use the function <code><b>ADJUST-ARRAY</b></code> to modify adjustable arrays in a variety of ways beyond just extending the length of a vector.
+            </p>
+            <p>
+                <sup>5</sup>Another parameter, <code>:test-not</code> parameter, specifies a two-argument predicate to be used like a <code>:test</code> argument except with the boolean result logically reversed. This parameter is deprecated, however, in preference for using the <code><b>COMPLEMENT</b></code> function. <code><b>COMPLEMENT</b></code> takes a function argu-ment and returns a function that takes the same number of arguments as the original and returns the logical complement of the original function. Thus, you can, and should, write this:
+            </p>
+            <pre>
+(count x sequence :test (complement #'some-test))
+</pre>
+            <p>
+                rather than the following:
+            </p>
+            <pre>
+(count x sequence :test-not #'some-test)
+</pre>
+            <p>
+                <sup>6</sup>Note, however, that the effect of <code>:start</code> and <code>:end</code> on <code><b>REMOVE</b></code> and <code><b>SUBSTITUTE</b></code> is only to limit the elements they consider for removal or substitution; elements before <code>:start</code> and after <code>:end</code> will be passed through untouched.
+            </p>
+            <p>
+                <sup>7</sup>This same functionality goes by the name <code>grep</code> in Perl and <code>filter</code> in Python.
+            </p>
+            <p>
+                <sup>8</sup>The difference between the predicates passed as <code>:test</code> arguments and as the function arguments to the <code>-IF</code> and <code>-IF-NOT</code> functions is that the <code>:test</code> predicates are two-argument predicates used to compare the elements of the sequence to the specific item while the <code>-IF</code> and <code>-IF-NOT</code> predicates are one-argument functions that simply test the individual elements of the sequence. If the vanilla variants didn't exist, you could implement them in terms of the -IF versions by embedding a specific item in the test function.
+            </p>
+            <pre>
+(count char string) ===
+  (count-if #'(lambda (c) (eql char c)) string)
+</pre>
+            <pre>
+(count char string :test #'CHAR-EQUAL) ===
+  (count-if #'(lambda (c) (char-equal char c)) string)
+</pre>
+            <p>
+                <sup>9</sup>If you tell <code><b>CONCATENATE</b></code> to return a specialized vector, such as a string, all the elements of the argument sequences must be instances of the vector's element type.
+            </p>
+            <p>
+                <sup>10</sup>When the sequence passed to the sorting functions is a vector, the "destruction" is actually guaranteed to entail permuting the elements in place, so you could get away without saving the returned value. However, it's good style to always do something with the return value since the sorting functions can modify lists in much more arbitrary ways.
+            </p>
+            <p>
+                <sup>11</sup>By an accident of history, the order of arguments to <code><b>GETHASH</b></code> is the opposite of <code><b>ELT</b></code>--<code><b>ELT</b></code> takes the collection first and then the index while <code><b>GETHASH</b></code> takes the key first and then the collection.
+            </p>
+            <p>
+                <sup>12</sup><code><b>LOOP</b></code>'s hash table iteration is typically implemented on top of a more primitive form, <code><b>WITH-HASH-TABLE-ITERATOR</b></code>, that you don't need to worry about; it was added to the language specifically to support implementing things such as <code><b>LOOP</b></code> and is of little use unless you need to write completely new control constructs for iterating over hash tables.
+            </p>
+        </div>
+        <div class="copyright">
+            Copyright © 2003-2005, Peter Seibel
+        </div>
+    </body>
+</html>

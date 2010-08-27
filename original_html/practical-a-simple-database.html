@@ -1,0 +1,709 @@
+<HTML><HEAD><TITLE>Practical: A Simple Database</TITLE><LINK REL="stylesheet" TYPE="text/css" HREF="style.css"/></HEAD><BODY><DIV CLASS="copyright">Copyright &copy; 2003-2005, Peter Seibel</DIV><H1>3. Practical: A Simple Database</H1><P>Obviously, before you can start building real software in Lisp,
+you'll have to learn the language. But let's face it--you may be
+thinking, &quot;'Practical Common Lisp,' isn't that an oxymoron? Why
+should you be expected to bother learning all the details of a
+language unless it's actually good for something you care about?&quot; So
+I'll start by giving you a small example of what you can do with
+Common Lisp. In this chapter you'll write a simple database for
+keeping track of CDs. You'll use similar techniques in Chapter 27
+when you build a database of MP3s for our streaming MP3 server. In
+fact, you could think of this as part of the MP3 software
+project--after all, in order to have a bunch of MP3s to listen to, it
+might be helpful to be able to keep track of which CDs you have and
+which ones you need to rip.</P><P>In this chapter, I'll cover just enough Lisp as we go along for you
+to understand how the code works. But I'll gloss over quite a few
+details. For now you needn't sweat the small stuff--the next several
+chapters will cover all the Common Lisp constructs used here, and
+more, in a much more systematic way.</P><P>One terminology note: I'll discuss a handful of Lisp operators in
+this chapter. In Chapter 4, you'll learn that Common Lisp provides
+three distinct kinds of operators: <I>functions</I>, <I>macros</I>, and
+<I>special operators</I>. For the purposes of this chapter, you don't
+really need to know the difference. I will, however, refer to
+different operators as functions or macros or special operators as
+appropriate, rather than trying to hide the details behind the word
+<I>operator</I>. For now you can treat <I>function</I>, <I>macro</I>, and
+<I>special operator</I> as all more or less equivalent.<SUP>1</SUP></P><P>Also, keep in mind that I won't bust out all the most sophisticated
+Common Lisp techniques for your very first post-&quot;hello, world&quot;
+program. The point of this chapter isn't that this is how you would
+write a database in Lisp; rather, the point is for you to get an idea
+of what programming in Lisp is like and to see how even a relatively
+simple Lisp program can be quite featureful.</P><A NAME="cds-and-records"><H2>CDs and Records</H2></A><P>To keep track of CDs that need to be ripped to MP3s and which CDs
+should be ripped first, each record in the database will contain the
+title and artist of the CD, a rating of how much the user likes it,
+and a flag saying whether it has been ripped. So, to start with,
+you'll need a way to represent a single database record (in other
+words, one CD). Common Lisp gives you lots of choices of data
+structures from a simple four-item list to a user-defined class,
+using the Common Lisp Object System (CLOS).</P><P>For now you can stay at the simple end of the spectrum and use a
+list. You can make a list with the <CODE><B>LIST</B></CODE> function, which,
+appropriately enough, returns a list of its arguments.</P><PRE>CL-USER&gt; (list 1 2 3)
+(1 2 3)</PRE><P>You could use a four-item list, mapping a given position in the list
+to a given field in the record. However, another flavor of
+list--called a <I>property list</I>, or <I>plist</I> for short--is even
+more convenient. A plist is a list where every other element,
+starting with the first, is a <I>symbol</I> that describes what the next
+element in the list is. I won't get into all the details of exactly
+what a symbol is right now; basically it's a name. For the symbols
+that name the fields in the CD database, you can use a particular
+kind of symbol, called a <I>keyword</I> symbol. A keyword is any name
+that starts with a colon (<CODE>:</CODE>), for instance, <CODE>:foo</CODE>.
+Here's an example of a plist using the keyword symbols <CODE>:a</CODE>,
+<CODE>:b</CODE>, and <CODE>:c</CODE> as property names:</P><PRE>CL-USER&gt; (list :a 1 :b 2 :c 3)
+(:A 1 :B 2 :C 3)</PRE><P>Note that you can create a property list with the same <CODE><B>LIST</B></CODE>
+function as you use to create other lists; it's the contents that
+make it a plist.</P><P>The thing that makes plists a convenient way to represent the records
+in a database is the function <CODE><B>GETF</B></CODE>, which takes a plist and a
+symbol and returns the value in the plist following the symbol,
+making a plist a sort of poor man's hash table. Lisp has real hash
+tables too, but plists are sufficient for your needs here and can
+more easily be saved to a file, which will come in handy later. </P><PRE>CL-USER&gt; (getf (list :a 1 :b 2 :c 3) :a)
+1
+CL-USER&gt; (getf (list :a 1 :b 2 :c 3) :c)
+3</PRE><P>Given all that, you can easily enough write a function <CODE>make-cd</CODE>
+that will take the four fields as arguments and return a plist
+representing that CD.</P><PRE>(defun make-cd (title artist rating ripped)
+  (list :title title :artist artist :rating rating :ripped ripped))</PRE><P>The word <CODE><B>DEFUN</B></CODE> tells us that this form is defining a new
+function. The name of the function is <CODE>make-cd</CODE>. After the name
+comes the parameter list. This function has four parameters:
+<CODE>title</CODE>, <CODE>artist</CODE>, <CODE>rating</CODE>, and <CODE>ripped</CODE>.
+Everything after the parameter list is the body of the function. In
+this case the body is just one form, a call to <CODE><B>LIST</B></CODE>. When
+<CODE>make-cd</CODE> is called, the arguments passed to the call will be
+bound to the variables in the parameter list. For instance, to make a
+record for the CD <I>Roses</I> by Kathy Mattea, you might call
+<CODE>make-cd</CODE> like this:</P><PRE>CL-USER&gt; (make-cd &quot;Roses&quot; &quot;Kathy Mattea&quot; 7 t)
+(:TITLE &quot;Roses&quot; :ARTIST &quot;Kathy Mattea&quot; :RATING 7 :RIPPED T) </PRE><A NAME="filing-cds"><H2>Filing CDs</H2></A><P>A single record, however, does not a database make. You need some
+larger construct to hold the records. Again, for simplicity's sake, a
+list seems like a good choice. Also for simplicity you can use a
+global variable, <CODE>*db*</CODE>, which you can define with the
+<CODE><B>DEFVAR</B></CODE> macro. The asterisks (*) in the name are a Lisp naming
+convention for global variables.<SUP>2</SUP></P><PRE>(defvar *db* nil)</PRE><P>You can use the <CODE><B>PUSH</B></CODE> macro to add items to <CODE>*db*</CODE>. But it's
+probably a good idea to abstract things a tiny bit, so you should
+define a function <CODE>add-record</CODE> that adds a record to the
+database.</P><PRE>(defun add-record (cd) (push cd *db*))</PRE><P>Now you can use <CODE>add-record</CODE> and <CODE>make-cd</CODE> together to add
+CDs to the database.</P><PRE>CL-USER&gt; (add-record (make-cd &quot;Roses&quot; &quot;Kathy Mattea&quot; 7 t))
+((:TITLE &quot;Roses&quot; :ARTIST &quot;Kathy Mattea&quot; :RATING 7 :RIPPED T))
+CL-USER&gt; (add-record (make-cd &quot;Fly&quot; &quot;Dixie Chicks&quot; 8 t))
+((:TITLE &quot;Fly&quot; :ARTIST &quot;Dixie Chicks&quot; :RATING 8 :RIPPED T)
+ (:TITLE &quot;Roses&quot; :ARTIST &quot;Kathy Mattea&quot; :RATING 7 :RIPPED T))
+CL-USER&gt; (add-record (make-cd &quot;Home&quot; &quot;Dixie Chicks&quot; 9 t))
+((:TITLE &quot;Home&quot; :ARTIST &quot;Dixie Chicks&quot; :RATING 9 :RIPPED T)
+ (:TITLE &quot;Fly&quot; :ARTIST &quot;Dixie Chicks&quot; :RATING 8 :RIPPED T)
+ (:TITLE &quot;Roses&quot; :ARTIST &quot;Kathy Mattea&quot; :RATING 7 :RIPPED T))</PRE><P>The stuff printed by the REPL after each call to <CODE>add-record</CODE> is
+the return value, which is the value returned by the last expression
+in the function body, the <CODE><B>PUSH</B></CODE>. And <CODE><B>PUSH</B></CODE> returns the new
+value of the variable it's modifying. So what you're actually seeing
+is the value of the database after the record has been added. </P><A NAME="looking-at-the-database-contents"><H2>Looking at the Database Contents</H2></A><P>You can also see the current value of <CODE>*db*</CODE> whenever you want
+by typing <CODE>*db*</CODE> at the REPL.</P><PRE>CL-USER&gt; *db*
+((:TITLE &quot;Home&quot; :ARTIST &quot;Dixie Chicks&quot; :RATING 9 :RIPPED T)
+ (:TITLE &quot;Fly&quot; :ARTIST &quot;Dixie Chicks&quot; :RATING 8 :RIPPED T)
+ (:TITLE &quot;Roses&quot; :ARTIST &quot;Kathy Mattea&quot; :RATING 7 :RIPPED T))</PRE><P>However, that's not a very satisfying way of looking at the output.
+You can write a <CODE>dump-db</CODE> function that dumps out the database
+in a more human-readable format, like this:</P><PRE>TITLE:    Home
+ARTIST:   Dixie Chicks
+RATING:   9
+RIPPED:   T
+
+TITLE:    Fly
+ARTIST:   Dixie Chicks
+RATING:   8
+RIPPED:   T
+
+TITLE:    Roses
+ARTIST:   Kathy Mattea
+RATING:   7
+RIPPED:   T</PRE><P>The function looks like this:</P><PRE>(defun dump-db ()
+  (dolist (cd *db*)
+    (format t &quot;~{~a:~10t~a~%~}~%&quot; cd)))</PRE><P>This function works by looping over all the elements of <CODE>*db*</CODE>
+with the <CODE><B>DOLIST</B></CODE> macro, binding each element to the variable
+<CODE>cd</CODE> in turn. For each value of <CODE>cd</CODE>, you use the
+<CODE><B>FORMAT</B></CODE> function to print it. </P><P>Admittedly, the <CODE><B>FORMAT</B></CODE> call is a little cryptic. However,
+<CODE><B>FORMAT</B></CODE> isn't particularly more complicated than C or Perl's
+<CODE>printf</CODE> function or Python's string-<CODE>%</CODE> operator. In
+Chapter 18 I'll discuss <CODE><B>FORMAT</B></CODE> in greater detail. For now we can
+take this call bit by bit. As you saw in Chapter 2, <CODE><B>FORMAT</B></CODE> takes
+at least two arguments, the first being the stream where it sends its
+output; <CODE>t</CODE> is shorthand for the stream
+<CODE>*standard-output*</CODE>.</P><P>The second argument to <CODE><B>FORMAT</B></CODE> is a format string that can
+contain both literal text and directives telling <CODE><B>FORMAT</B></CODE> things
+such as how to interpolate the rest of its arguments. Format
+directives start with <CODE>~</CODE> (much the way <CODE>printf</CODE>'s
+directives start with <CODE>%</CODE>). <CODE><B>FORMAT</B></CODE> understands dozens of
+directives, each with their own set of options.<SUP>3</SUP> However, for now I'll just focus on the ones you need to write
+<CODE>dump-db</CODE>.</P><P>The <CODE>~a</CODE> directive is the <I>aesthetic</I> directive; it means to
+consume one argument and output it in a human-readable form. This
+will render keywords without the leading : and strings without
+quotation marks. For instance:</P><PRE>CL-USER&gt; (format t &quot;~a&quot; &quot;Dixie Chicks&quot;)
+Dixie Chicks
+NIL</PRE><P>or:</P><PRE>CL-USER&gt; (format t &quot;~a&quot; :title)
+TITLE
+NIL</PRE><P>The <CODE>~t</CODE> directive is for tabulating. The <CODE>~10t</CODE> tells
+<CODE><B>FORMAT</B></CODE> to emit enough spaces to move to the tenth column before
+processing the next <CODE>~a</CODE>. A <CODE>~t</CODE> doesn't consume any
+arguments. </P><PRE>CL-USER&gt; (format t &quot;~a:~10t~a&quot; :artist &quot;Dixie Chicks&quot;)
+ARTIST:   Dixie Chicks
+NIL</PRE><P>Now things get slightly more complicated. When <CODE><B>FORMAT</B></CODE> sees
+<CODE>~{</CODE> the next argument to be consumed must be a list.
+<CODE><B>FORMAT</B></CODE> loops over that list, processing the directives between
+the <CODE>~{</CODE> and <CODE>~</CODE>}, consuming as many elements of the list
+as needed each time through the list. In <CODE>dump-db</CODE>, the
+<CODE><B>FORMAT</B></CODE> loop will consume one keyword and one value from the list
+each time through the loop. The <CODE>~%</CODE> directive doesn't consume
+any arguments but tells <CODE><B>FORMAT</B></CODE> to emit a newline. Then after the
+<CODE>~</CODE>} ends the loop, the last <CODE>~%</CODE> tells <CODE><B>FORMAT</B></CODE> to emit
+one more newline to put a blank line between each CD. </P><P>Technically, you could have also used <CODE><B>FORMAT</B></CODE> to loop over the
+database itself, turning our <CODE>dump-db</CODE> function into a
+one-liner.</P><PRE>(defun dump-db ()
+  (format t &quot;~{~{~a:~10t~a~%~}~%~}&quot; *db*))</PRE><P>That's either very cool or very scary depending on your point of
+view. </P><A NAME="improving-the-user-interaction"><H2>Improving the User Interaction</H2></A><P>While our <CODE>add-record</CODE> function works fine for adding records,
+it's a bit Lispy for the casual user. And if they want to add a bunch
+of records, it's not very convenient. So you may want to write a
+function to prompt the user for information about a set of CDs. Right
+away you know you'll need some way to prompt the user for a piece of
+information and read it. So let's write that.</P><PRE>(defun prompt-read (prompt)
+  (format *query-io* &quot;~a: &quot; prompt)
+  (force-output *query-io*)
+  (read-line *query-io*))</PRE><P>You use your old friend <CODE><B>FORMAT</B></CODE> to emit a prompt. Note that
+there's no <CODE>~%</CODE> in the format string, so the cursor will stay on
+the same line. The call to <CODE><B>FORCE-OUTPUT</B></CODE> is necessary in some
+implementations to ensure that Lisp doesn't wait for a newline before
+it prints the prompt.</P><P>Then you can read a single line of text with the aptly named
+<CODE><B>READ-LINE</B></CODE> function. The variable <CODE>*query-io*</CODE> is a global
+variable (which you can tell because of the <CODE>*</CODE> naming
+convention for global variables) that contains the input stream
+connected to the terminal. The return value of <CODE>prompt-read</CODE>
+will be the value of the last form, the call to <CODE><B>READ-LINE</B></CODE>, which
+returns the string it read (without the trailing newline.)</P><P>You can combine your existing <CODE>make-cd</CODE> function with
+<CODE>prompt-read</CODE> to build a function that makes a new CD record
+from data it gets by prompting for each value in turn. </P><PRE>(defun prompt-for-cd ()
+  (make-cd
+   (prompt-read &quot;Title&quot;)
+   (prompt-read &quot;Artist&quot;)
+   (prompt-read &quot;Rating&quot;)
+   (prompt-read &quot;Ripped [y/n]&quot;)))</PRE><P>That's almost right. Except <CODE>prompt-read</CODE> returns a string,
+which, while fine for the Title and Artist fields, isn't so great for
+the Rating and Ripped fields, which should be a number and a boolean.
+Depending on how sophisticated a user interface you want, you can go
+to arbitrary lengths to validate the data the user enters. For now
+let's lean toward the quick and dirty: you can wrap the
+<CODE>prompt-read</CODE> for the rating in a call to Lisp's
+<CODE><B>PARSE-INTEGER</B></CODE> function, like this:</P><PRE>(parse-integer (prompt-read &quot;Rating&quot;))</PRE><P>Unfortunately, the default behavior of <CODE><B>PARSE-INTEGER</B></CODE> is to
+signal an error if it can't parse an integer out of the string or if
+there's any non-numeric junk in the string. However, it takes an
+optional keyword argument <CODE>:junk-allowed</CODE>, which tells it to
+relax a bit.</P><PRE>(parse-integer (prompt-read &quot;Rating&quot;) :junk-allowed t)</PRE><P>But there's still one problem: if it can't find an integer amidst all
+the junk, <CODE><B>PARSE-INTEGER</B></CODE> will return <CODE>NIL</CODE> rather than a
+number. In keeping with the quick-and-dirty approach, you may just
+want to call that 0 and continue. Lisp's <CODE><B>OR</B></CODE> macro is just the
+thing you need here. It's similar to the &quot;short-circuiting&quot; <CODE>||</CODE>
+in Perl, Python, Java, and C; it takes a series of expressions,
+evaluates them one at a time, and returns the first non-nil value (or
+<CODE><B>NIL</B></CODE> if they're all <CODE><B>NIL</B></CODE>). So you can use the following: </P><PRE>(or (parse-integer (prompt-read &quot;Rating&quot;) :junk-allowed t) 0)</PRE><P>to get a default value of 0.</P><P>Fixing the code to prompt for Ripped is quite a bit simpler. You can
+just use the Common Lisp function <CODE><B>Y-OR-N-P</B></CODE>.</P><PRE>(y-or-n-p &quot;Ripped [y/n]: &quot;)</PRE><P>In fact, this will be the most robust part of <CODE>prompt-for-cd</CODE>,
+as <CODE><B>Y-OR-N-P</B></CODE> will reprompt the user if they enter something that
+doesn't start with <I>y</I>, <I>Y</I>, <I>n</I>, or <I>N</I>.</P><P>Putting those pieces together you get a reasonably robust
+<CODE>prompt-for-cd</CODE> function.</P><PRE>(defun prompt-for-cd ()
+  (make-cd
+   (prompt-read &quot;Title&quot;)
+   (prompt-read &quot;Artist&quot;)
+   (or (parse-integer (prompt-read &quot;Rating&quot;) :junk-allowed t) 0)
+   (y-or-n-p &quot;Ripped [y/n]: &quot;)))</PRE><P>Finally, you can finish the &quot;add a bunch of CDs&quot; interface by
+wrapping <CODE>prompt-for-cd</CODE> in a function that loops until the user
+is done. You can use the simple form of the <CODE><B>LOOP</B></CODE> macro, which
+repeatedly executes a body of expressions until it's exited by a call
+to <CODE><B>RETURN</B></CODE>. For example: </P><PRE>(defun add-cds ()
+  (loop (add-record (prompt-for-cd))
+      (if (not (y-or-n-p &quot;Another? [y/n]: &quot;)) (return))))</PRE><P>Now you can use <CODE>add-cds</CODE> to add some more CDs to the database.</P><PRE>CL-USER&gt; (add-cds)
+Title: Rockin' the Suburbs
+Artist: Ben Folds
+Rating: 6
+Ripped  [y/n]: y
+Another?  [y/n]: y
+Title: Give Us a Break
+Artist: Limpopo
+Rating: 10
+Ripped  [y/n]: y
+Another?  [y/n]: y
+Title: Lyle Lovett
+Artist: Lyle Lovett
+Rating: 9
+Ripped  [y/n]: y
+Another?  [y/n]: n
+NIL</PRE><A NAME="saving-and-loading-the-database"><H2>Saving and Loading the Database</H2></A><P>Having a convenient way to add records to the database is nice. But
+it's not so nice that the user is going to be very happy if they have
+to reenter all the records every time they quit and restart Lisp.
+Luckily, with the data structures you're using to represent the data,
+it's trivially easy to save the data to a file and reload it later.
+Here's a <CODE>save-db</CODE> function that takes a filename as an argument
+and saves the current state of the database:</P><PRE>(defun save-db (filename)
+  (with-open-file (out filename
+                   :direction :output
+                   :if-exists :supersede)
+    (with-standard-io-syntax
+      (print *db* out))))</PRE><P>The <CODE><B>WITH-OPEN-FILE</B></CODE> macro opens a file, binds the stream to a
+variable, executes a set of expressions, and then closes the file. It
+also makes sure the file is closed even if something goes wrong while
+evaluating the body. The list directly after <CODE><B>WITH-OPEN-FILE</B></CODE>
+isn't a function call but rather part of the syntax defined by
+<CODE><B>WITH-OPEN-FILE</B></CODE>. It contains the name of the variable that will
+hold the file stream to which you'll write within the body of
+<CODE><B>WITH-OPEN-FILE</B></CODE>, a value that must be a file name, and then some
+options that control how the file is opened. Here you specify that
+you're opening the file for writing with <CODE>:direction :output</CODE>
+and that you want to overwrite an existing file of the same name if
+it exists with <CODE>:if-exists :supersede</CODE>. </P><P>Once you have the file open, all you have to do is print the contents
+of the database with <CODE>(print *db* out)</CODE>. Unlike <CODE><B>FORMAT</B></CODE>,
+<CODE><B>PRINT</B></CODE> prints Lisp objects in a form that can be read back in by
+the Lisp reader. The macro <CODE><B>WITH-STANDARD-IO-SYNTAX</B></CODE> ensures that
+certain variables that affect the behavior of <CODE><B>PRINT</B></CODE> are set to
+their standard values. You'll use the same macro when you read the
+data back in to make sure the Lisp reader and printer are operating
+compatibly.</P><P>The argument to <CODE>save-db</CODE> should be a string containing the name
+of the file where the user wants to save the database. The exact form
+of the string will depend on what operating system they're using. For
+instance, on a Unix box they should be able to call <CODE>save-db</CODE>
+like this: </P><PRE>CL-USER&gt; (save-db &quot;~/my-cds.db&quot;)
+((:TITLE &quot;Lyle Lovett&quot; :ARTIST &quot;Lyle Lovett&quot; :RATING 9 :RIPPED T)
+ (:TITLE &quot;Give Us a Break&quot; :ARTIST &quot;Limpopo&quot; :RATING 10 :RIPPED T)
+ (:TITLE &quot;Rockin' the Suburbs&quot; :ARTIST &quot;Ben Folds&quot; :RATING 6 :RIPPED
+  T)
+ (:TITLE &quot;Home&quot; :ARTIST &quot;Dixie Chicks&quot; :RATING 9 :RIPPED T)
+ (:TITLE &quot;Fly&quot; :ARTIST &quot;Dixie Chicks&quot; :RATING 8 :RIPPED T)
+ (:TITLE &quot;Roses&quot; :ARTIST &quot;Kathy Mattea&quot; :RATING 9 :RIPPED T))</PRE><P>On Windows, the filename might be something like
+&quot;<CODE>c:/my-cds.db</CODE>&quot; or &quot;<CODE>c:\\my-cds.db</CODE>.&quot;<SUP>4</SUP></P><P>You can open this file in any text editor to see what it looks like.
+You should see something a lot like what the REPL prints if you type
+<CODE>*db*</CODE>.</P><P>The function to load the database back in is similar.</P><PRE>(defun load-db (filename)
+  (with-open-file (in filename)
+    (with-standard-io-syntax
+      (setf *db* (read in)))))</PRE><P>This time you don't need to specify <CODE>:direction</CODE> in the options
+to <CODE><B>WITH-OPEN-FILE</B></CODE>, since you want the default of <CODE>:input</CODE>.
+And instead of printing, you use the function <CODE><B>READ</B></CODE> to read from
+the stream <CODE>in</CODE>. This is the same reader used by the REPL and
+can read any Lisp expression you could type at the REPL prompt.
+However, in this case, you're just reading and saving the expression,
+not evaluating it. Again, the <CODE><B>WITH-STANDARD-IO-SYNTAX</B></CODE> macro
+ensures that <CODE><B>READ</B></CODE> is using the same basic syntax that
+<CODE>save-db</CODE> did when it <CODE><B>PRINT</B></CODE>ed the data.</P><P>The <CODE><B>SETF</B></CODE> macro is Common Lisp's main assignment operator. It
+sets its first argument to the result of evaluating its second
+argument. So in <CODE>load-db</CODE> the <CODE>*db*</CODE> variable will contain
+the object read from the file, namely, the list of lists written by
+<CODE>save-db</CODE>. You do need to be careful about one
+thing--<CODE>load-db</CODE> clobbers whatever was in <CODE>*db*</CODE> before the
+call. So if you've added records with <CODE>add-record</CODE> or
+<CODE>add-cds</CODE> that haven't been saved with <CODE>save-db</CODE>, you'll
+lose them. </P><A NAME="querying-the-database"><H2>Querying the Database</H2></A><P>Now that you have a way to save and reload the database to go along
+with a convenient user interface for adding new records, you soon may
+have enough records that you won't want to be dumping out the whole
+database just to look at what's in it. What you need is a way to
+query the database. You might like, for instance, to be able to write
+something like this:</P><PRE>(select :artist &quot;Dixie Chicks&quot;)</PRE><P>and get a list of all the records where the artist is the Dixie
+Chicks. Again, it turns out that the choice of saving the records in
+a list will pay off.</P><P>The function <CODE><B>REMOVE-IF-NOT</B></CODE> takes a predicate and a list and
+returns a list containing only the elements of the original list that
+match the predicate. In other words, it has removed all the elements
+that don't match the predicate. However, <CODE><B>REMOVE-IF-NOT</B></CODE> doesn't
+really remove anything--it creates a new list, leaving the original
+list untouched. It's like running grep over a file. The predicate
+argument can be any function that accepts a single argument and
+returns a boolean value--<CODE><B>NIL</B></CODE> for false and anything else for
+true. </P><P>For instance, if you wanted to extract all the even elements from a
+list of numbers, you could use <CODE><B>REMOVE-IF-NOT</B></CODE> as follows:</P><PRE>CL-USER&gt; (remove-if-not #'evenp '(1 2 3 4 5 6 7 8 9 10))
+(2 4 6 8 10)</PRE><P>In this case, the predicate is the function <CODE><B>EVENP</B></CODE>, which returns
+true if its argument is an even number. The funny notation <CODE>#'</CODE>
+is shorthand for &quot;Get me the function with the following name.&quot;
+Without the <CODE>#'</CODE>, Lisp would treat <CODE>evenp</CODE> as the name of a
+variable and look up the value of the variable, not the function.</P><P>You can also pass <CODE><B>REMOVE-IF-NOT</B></CODE> an anonymous function. For
+instance, if <CODE><B>EVENP</B></CODE> didn't exist, you could write the previous
+expression as the following: </P><PRE>CL-USER&gt; (remove-if-not #'(lambda (x) (= 0 (mod x 2))) '(1 2 3 4 5 6 7 8 9 10))
+(2 4 6 8 10)</PRE><P>In this case, the predicate is this anonymous function:</P><PRE>(lambda (x) (= 0 (mod x 2)))</PRE><P>which checks that its argument is equal to 0 modulus 2 (in other
+words, is even). If you wanted to extract only the odd numbers using
+an anonymous function, you'd write this:</P><PRE>CL-USER&gt; (remove-if-not #'(lambda (x) (= 1 (mod x 2))) '(1 2 3 4 5 6 7 8 9 10))
+(1 3 5 7 9)</PRE><P>Note that <CODE>lambda</CODE> isn't the name of the function--it's the
+indicator you're defining an anonymous function.<SUP>5</SUP> Other than the lack of a name, however, a <CODE><B>LAMBDA</B></CODE>
+expression looks a lot like a <CODE><B>DEFUN</B></CODE>: the word <CODE>lambda</CODE> is
+followed by a parameter list, which is followed by the body of the
+function. </P><P>To select all the Dixie Chicks' albums in the database using
+<CODE><B>REMOVE-IF-NOT</B></CODE>, you need a function that returns true when the
+artist field of a record is <CODE>&quot;Dixie Chicks&quot;</CODE>. Remember that we
+chose the plist representation for the database records because the
+function <CODE><B>GETF</B></CODE> can extract named fields from a plist. So assuming
+<CODE>cd</CODE> is the name of a variable holding a single database record,
+you can use the expression <CODE>(getf cd :artist)</CODE> to extract the
+name of the artist. The function <CODE><B>EQUAL</B></CODE>, when given string
+arguments, compares them character by character. So <CODE>(equal
+(getf cd :artist) &quot;Dixie Chicks&quot;)</CODE> will test whether the artist field
+of a given CD is equal to <CODE>&quot;Dixie Chicks&quot;</CODE>. All you need to do
+is wrap that expression in a <CODE><B>LAMBDA</B></CODE> form to make an anonymous
+function and pass it to <CODE><B>REMOVE-IF-NOT</B></CODE>. </P><PRE>CL-USER&gt; (remove-if-not
+  #'(lambda (cd) (equal (getf cd :artist) &quot;Dixie Chicks&quot;)) *db*)
+((:TITLE &quot;Home&quot; :ARTIST &quot;Dixie Chicks&quot; :RATING 9 :RIPPED T)
+ (:TITLE &quot;Fly&quot; :ARTIST &quot;Dixie Chicks&quot; :RATING 8 :RIPPED T))</PRE><P>Now suppose you want to wrap that whole expression in a function that
+takes the name of the artist as an argument. You can write that like
+this:</P><PRE>(defun select-by-artist (artist)
+  (remove-if-not
+   #'(lambda (cd) (equal (getf cd :artist) artist))
+   *db*))</PRE><P>Note how the anonymous function, which contains code that won't run
+until it's invoked in <CODE><B>REMOVE-IF-NOT</B></CODE>, can nonetheless refer to
+the variable <CODE>artist</CODE>. In this case the anonymous function
+doesn't just save you from having to write a regular function--it
+lets you write a function that derives part of its meaning--the value
+of <CODE>artist</CODE>--from the context in which it's embedded. </P><P>So that's <CODE>select-by-artist</CODE>. However, selecting by artist is
+only one of the kinds of queries you might like to support. You
+<I>could</I> write several more functions, such as
+<CODE>select-by-title</CODE>, <CODE>select-by-rating</CODE>,
+<CODE>select-by-title-and-artist</CODE>, and so on. But they'd all be about
+the same except for the contents of the anonymous function. You can
+instead make a more general <CODE>select</CODE> function that takes a
+function as an argument.</P><PRE>(defun select (selector-fn)
+  (remove-if-not selector-fn *db*))</PRE><P>So what happened to the <CODE>#'</CODE>? Well, in this case you don't want
+<CODE><B>REMOVE-IF-NOT</B></CODE> to use the function named <CODE>selector-fn</CODE>. You
+want it to use the anonymous function that was passed as an argument
+to <CODE>select</CODE> in the <I>variable</I> <CODE>selector-fn</CODE>. Though, the
+<CODE>#'</CODE> comes back in the <I>call</I> to <CODE>select</CODE>.</P><PRE>CL-USER&gt; (select #'(lambda (cd) (equal (getf cd :artist) &quot;Dixie Chicks&quot;)))
+((:TITLE &quot;Home&quot; :ARTIST &quot;Dixie Chicks&quot; :RATING 9 :RIPPED T)
+ (:TITLE &quot;Fly&quot; :ARTIST &quot;Dixie Chicks&quot; :RATING 8 :RIPPED T))</PRE><P>But that's really quite gross-looking. Luckily, you can wrap up the
+creation of the anonymous function. </P><PRE>(defun artist-selector (artist)
+  #'(lambda (cd) (equal (getf cd :artist) artist)))</PRE><P>This is a function that returns a function and one that references a
+variable that--it seems--won't exist after <CODE>artist-selector</CODE>
+returns.<SUP>6</SUP> It may seem odd now, but it actually works just the way
+you'd want--if you call <CODE>artist-selector</CODE> with an argument of
+<CODE>&quot;Dixie Chicks&quot;</CODE>, you get an anonymous function that matches CDs
+whose <CODE>:artist</CODE> field is <CODE>&quot;Dixie Chicks&quot;</CODE>, and if you call
+it with <CODE>&quot;Lyle Lovett&quot;</CODE>, you get a different function that will
+match against an <CODE>:artist</CODE> field of <CODE>&quot;Lyle Lovett&quot;</CODE>. So now
+you can rewrite the call to <CODE>select</CODE> like this:</P><PRE>CL-USER&gt; (select (artist-selector &quot;Dixie Chicks&quot;))
+((:TITLE &quot;Home&quot; :ARTIST &quot;Dixie Chicks&quot; :RATING 9 :RIPPED T)
+ (:TITLE &quot;Fly&quot; :ARTIST &quot;Dixie Chicks&quot; :RATING 8 :RIPPED T))</PRE><P>Now you just need some more functions to generate selectors. But just
+as you don't want to have to write <CODE>select-by-title</CODE>,
+<CODE>select-by-rating</CODE>, and so on, because they would all be quite
+similar, you're not going to want to write a bunch of nearly
+identical selector-function generators, one for each field. Why not
+write one general-purpose selector-function generator, a function
+that, depending on what arguments you pass it, will generate a
+selector function for different fields or maybe even a combination of
+fields? You can write such a function, but first you need a crash
+course in a feature called <I>keyword parameters</I>.</P><P>In the functions you've written so far, you've specified a simple
+list of parameters, which are bound to the corresponding arguments in
+the call to the function. For instance, the following function:</P><PRE>(defun foo (a b c) (list a b c))</PRE><P>has three parameters, <CODE>a</CODE>, <CODE>b</CODE>, and <CODE>c</CODE>, and must be
+called with three arguments. But sometimes you may want to write a
+function that can be called with varying numbers of arguments.
+Keyword parameters are one way to achieve this. A version of
+<CODE>foo</CODE> that uses keyword parameters might look like this: </P><PRE>(defun foo (&amp;key a b c) (list a b c))</PRE><P>The only difference is the <CODE>&amp;key</CODE> at the beginning of the
+argument list. However, the calls to this new <CODE>foo</CODE> will look
+quite different. These are all legal calls with the result to the
+right of the ==&gt;:</P><PRE>(foo :a 1 :b 2 :c 3)  ==&gt; (1 2 3)
+(foo :c 3 :b 2 :a 1)  ==&gt; (1 2 3)
+(foo :a 1 :c 3)       ==&gt; (1 NIL 3)
+(foo)                 ==&gt; (NIL NIL NIL)</PRE><P>As these examples show, the value of the variables <CODE>a</CODE>, <CODE>b</CODE>,
+and <CODE>c</CODE> are bound to the values that follow the corresponding
+keyword. And if a particular keyword isn't present in the call, the
+corresponding variable is set to <CODE><B>NIL</B></CODE>. I'm glossing over a bunch
+of details of how keyword parameters are specified and how they relate
+to other kinds of parameters, but you need to know one more detail.</P><P>Normally if a function is called with no argument for a particular
+keyword parameter, the parameter will have the value <CODE><B>NIL</B></CODE>.
+However, sometimes you'll want to be able to distinguish between a
+<CODE><B>NIL</B></CODE> that was explicitly passed as the argument to a keyword
+parameter and the default value <CODE><B>NIL</B></CODE>. To allow this, when you
+specify a keyword parameter you can replace the simple name with a
+list consisting of the name of the parameter, a default value, and
+another parameter name, called a <I>supplied-p</I> parameter. The
+supplied-p parameter will be set to true or false depending on
+whether an argument was actually passed for that keyword parameter in
+a particular call to the function. Here's a version of <CODE>foo</CODE>
+that uses this feature:</P><PRE>(defun foo (&amp;key a (b 20) (c 30 c-p)) (list a b c c-p))</PRE><P>Now the same calls from earlier yield these results:</P><PRE>(foo :a 1 :b 2 :c 3)  ==&gt; (1 2 3 T)
+(foo :c 3 :b 2 :a 1)  ==&gt; (1 2 3 T)
+(foo :a 1 :c 3)       ==&gt; (1 20 3 T)
+(foo)                 ==&gt; (NIL 20 30 NIL)</PRE><P>The general selector-function generator, which you can call
+<CODE>where</CODE> for reasons that will soon become apparent if you're
+familiar with SQL databases, is a function that takes four keyword
+parameters corresponding to the fields in our CD records and
+generates a selector function that selects any CDs that match all the
+values given to <CODE>where</CODE>. For instance, it will let you say
+things like this: </P><PRE>(select (where :artist &quot;Dixie Chicks&quot;))</PRE><P>or this:</P><PRE>(select (where :rating 10 :ripped nil))</PRE><P>The function looks like this:</P><PRE>(defun where (&amp;key title artist rating (ripped nil ripped-p))
+  #'(lambda (cd)
+      (and
+       (if title    (equal (getf cd :title)  title)  t)
+       (if artist   (equal (getf cd :artist) artist) t)
+       (if rating   (equal (getf cd :rating) rating) t)
+       (if ripped-p (equal (getf cd :ripped) ripped) t))))</PRE><P>This function returns an anonymous function that returns the logical
+<CODE>AND</CODE> of one clause per field in our CD records. Each clause
+checks if the appropriate argument was passed in and then either
+compares it to the value in the corresponding field in the CD record
+or returns <CODE>t</CODE>, Lisp's version of truth, if the parameter wasn't
+passed in. Thus, the selector function will return <CODE>t</CODE> only for
+CDs that match all the arguments passed to <CODE>where</CODE>.<SUP>7</SUP> Note that you need to use a three-item list to specify
+the keyword parameter <CODE>ripped</CODE> because you need to know whether
+the caller actually passed <CODE>:ripped nil</CODE>, meaning, &quot;Select CDs
+whose ripped field is nil,&quot; or whether they left out <CODE>:ripped</CODE>
+altogether, meaning &quot;I don't care what the value of the ripped field
+is.&quot; </P><A NAME="updating-existing-records--another-use-for-where"><H2>Updating Existing Records--Another Use for WHERE</H2></A><P>Now that you've got nice generalized <CODE>select</CODE> and <CODE>where</CODE>
+functions, you're in a good position to write the next feature that
+every database needs--a way to update particular records. In SQL the
+<CODE>update</CODE> command is used to update a set of records matching a
+particular <CODE>where</CODE> clause. That seems like a good model,
+especially since you've already got a <CODE>where</CODE>-clause generator.
+In fact, the <CODE>update</CODE> function is mostly just the application of
+a few ideas you've already seen: using a passed-in selector function
+to choose the records to update and using keyword arguments to
+specify the values to change. The main new bit is the use of a
+function <CODE><B>MAPCAR</B></CODE> that maps over a list, <CODE>*db*</CODE> in this case,
+and returns a new list containing the results of calling a function
+on each item in the original list.</P><PRE>(defun update (selector-fn &amp;key title artist rating (ripped nil ripped-p))
+  (setf *db*
+        (mapcar
+         #'(lambda (row)
+             (when (funcall selector-fn row)
+               (if title    (setf (getf row :title) title))
+               (if artist   (setf (getf row :artist) artist))
+               (if rating   (setf (getf row :rating) rating))
+               (if ripped-p (setf (getf row :ripped) ripped)))
+             row) *db*)))</PRE><P>One other new bit here is the use of <CODE><B>SETF</B></CODE> on a complex form such
+as <CODE>(getf row :title)</CODE>. I'll discuss <CODE><B>SETF</B></CODE> in greater detail
+in Chapter 6, but for now you just need to know that it's a general
+assignment operator that can be used to assign lots of &quot;places&quot; other
+than just variables. (It's a coincidence that <CODE><B>SETF</B></CODE> and <CODE><B>GETF</B></CODE>
+have such similar names--they don't have any special relationship.)
+For now it's enough to know that after <CODE>(setf (getf row :title)
+title)</CODE>, the plist referenced by row will have the value of the
+variable <CODE>title</CODE> following the property name <CODE>:title</CODE>. With
+this <CODE>update</CODE> function if you decide that you <I>really</I> dig the
+Dixie Chicks and that all their albums should go to 11, you can
+evaluate the following form: </P><PRE>CL-USER&gt; (update (where :artist &quot;Dixie Chicks&quot;) :rating 11)
+NIL</PRE><P>And it is so.</P><PRE>CL-USER&gt; (select (where :artist &quot;Dixie Chicks&quot;))
+((:TITLE &quot;Home&quot; :ARTIST &quot;Dixie Chicks&quot; :RATING 11 :RIPPED T)
+ (:TITLE &quot;Fly&quot; :ARTIST &quot;Dixie Chicks&quot; :RATING 11 :RIPPED T))</PRE><P>You can even more easily add a function to delete rows from the
+database.</P><PRE>(defun delete-rows (selector-fn)
+  (setf *db* (remove-if selector-fn *db*)))</PRE><P>The function <CODE><B>REMOVE-IF</B></CODE> is the complement of <CODE><B>REMOVE-IF-NOT</B></CODE>;
+it returns a list with all the elements that do match the predicate
+removed. Like <CODE><B>REMOVE-IF-NOT</B></CODE>, it doesn't actually affect the list
+it's passed but by saving the result back into <CODE>*db*</CODE>,
+<CODE>delete-rows</CODE><SUP>8</SUP> actually changes the contents of the
+database.<SUP>9</SUP></P><A NAME="removing-duplication-and-winning-big"><H2>Removing Duplication and Winning Big</H2></A><P>So far <I>all</I> the database code supporting insert,
+select, update, and delete, not to mention a command-line user
+interface for adding new records and dumping out the contents, is
+just a little more than 50 lines. Total.<SUP>10</SUP></P><P>Yet there's still some annoying code duplication. And it turns out you
+can remove the duplication and make the code more flexible at the same
+time. The duplication I'm thinking of is in the where function. The
+body of the <CODE>where</CODE> function is a bunch of clauses like this, one
+per field:</P><PRE>(if title (equal (getf cd :title) title) t)</PRE><P>Right now it's not so bad, but like all code duplication it has the
+same cost: if you want to change how it works, you have to change
+multiple copies. And if you change the fields in a CD, you'll have to
+add or remove clauses to <CODE>where</CODE>. And <CODE>update</CODE> suffers from
+the same kind of duplication. It's doubly annoying since the whole
+point of the <CODE>where</CODE> function is to dynamically generate a bit
+of code that checks the values you care about; why should it have to
+do work at runtime checking whether <CODE>title</CODE> was even passed in?</P><P>Imagine that you were trying to optimize this code and discovered
+that it was spending too much time checking whether <CODE>title</CODE> and
+the rest of the keyword parameters to <CODE>where</CODE> were even
+set?<SUP>11</SUP> If you really wanted to
+remove all those runtime checks, you could go through a program and
+find all the places you call <CODE>where</CODE> and look at exactly what
+arguments you're passing. Then you could replace each call to
+<CODE>where</CODE> with an anonymous function that does only the
+computation necessary. For instance, if you found this snippet of
+code:</P><PRE>(select (where :title &quot;Give Us a Break&quot; :ripped t))</PRE><P>you could change it to this:</P><PRE>(select
+ #'(lambda (cd)
+     (and (equal (getf cd :title) &quot;Give Us a Break&quot;)
+          (equal (getf cd :ripped) t))))</PRE><P>Note that the anonymous function is different from the one that
+<CODE>where</CODE> would have returned; you're not trying to save the call
+to <CODE>where</CODE> but rather to provide a more efficient selector
+function. This anonymous function has clauses only for the fields
+that you actually care about at this call site, so it doesn't do any
+extra work the way a function returned by <CODE>where</CODE> might. </P><P>You can probably imagine going through all your source code and
+fixing up all the calls to <CODE>where</CODE> in this way. But you can
+probably also imagine that it would be a huge pain. If there were
+enough of them, and it was important enough, it might even be
+worthwhile to write some kind of preprocessor that converts
+<CODE>where</CODE> calls to the code you'd write by hand. </P><P>The Lisp feature that makes this trivially easy is its macro system.
+I can't emphasize enough that the Common Lisp macro shares
+essentially nothing but the name with the text-based macros found in
+C and C++. Where the C pre-processor operates by textual substitution
+and understands almost nothing of the structure of C and C++, a Lisp
+macro is essentially a code generator that gets run for you
+automatically by the compiler.<SUP>12</SUP> When
+a Lisp expression contains a call to a macro, instead of evaluating
+the arguments and passing them to the function, the Lisp compiler
+passes the arguments, unevaluated, to the macro code, which returns a
+new Lisp expression that is then evaluated in place of the original
+macro call.</P><P>I'll start with a simple, and silly, example and then show how you
+can replace the <CODE>where</CODE> function with a <CODE>where</CODE> macro.
+Before I can write this example macro, I need to quickly introduce
+one new function: <CODE>REVERSE</CODE> takes a list as an argument and
+returns a new list that is its reverse. So <CODE>(reverse '(1 2 3))</CODE>
+evaluates to <CODE>(3 2 1)</CODE>. Now let's create a macro. </P><PRE>(defmacro backwards (expr) (reverse expr))</PRE><P>The main syntactic difference between a function and a macro is that
+you define a macro with <CODE><B>DEFMACRO</B></CODE> instead of <CODE><B>DEFUN</B></CODE>. After
+that a macro definition consists of a name, just like a function, a
+parameter list, and a body of expressions, both also like a function.
+However, a macro has a totally different effect. You can use this
+macro as follows:</P><PRE>CL-USER&gt; (backwards (&quot;hello, world&quot; t format))
+hello, world
+NIL</PRE><P>How did that work? When the REPL started to evaluate the
+<CODE>backwards</CODE> expression, it recognized that <CODE>backwards</CODE> is
+the name of a macro. So it left the expression <CODE>(&quot;hello, world&quot;
+t format)</CODE> unevaluated, which is good because it isn't a legal Lisp
+form. It then passed that list to the <CODE>backwards</CODE> code. The code
+in <CODE>backwards</CODE> passed the list to <CODE><B>REVERSE</B></CODE>, which returned
+the list <CODE>(format t &quot;hello, world&quot;)</CODE>. <CODE>backwards</CODE> then
+passed that value back out to the REPL, which then evaluated it in
+place of the original expression.</P><P>The <CODE>backwards</CODE> macro thus defines a new language that's a lot
+like Lisp--just backward--that you can drop into anytime simply by
+wrapping a backward Lisp expression in a call to the <CODE>backwards</CODE>
+macro. And, in a compiled Lisp program, that new language is just as
+efficient as normal Lisp because all the macro code--the code that
+generates the new expression--runs at compile time. In other words,
+the compiler will generate exactly the same code whether you write
+<CODE>(backwards (&quot;hello, world&quot; t format))</CODE> or <CODE>(format t
+&quot;hello, world&quot;)</CODE>.</P><P>So how does that help with the code duplication in <CODE>where</CODE>?
+Well, you can write a macro that generates exactly the code you need
+for each particular call to <CODE>where</CODE>. Again, the best approach is
+to build our code bottom up. In the hand-optimized selector function,
+you had an expression of the following form for each actual field
+referred to in the original call to <CODE>where</CODE>:</P><PRE>(equal (getf cd <I>field</I>) <I>value</I>)</PRE><P>So let's write a function that, given the name of a field and a
+value, returns such an expression. Since an expression is just a
+list, you might think you could write something like this:</P><PRE>(defun make-comparison-expr (field value)    ; wrong
+  (list equal (list getf cd field) value))</PRE><P>However, there's one trick here: as you know, when Lisp sees a simple
+name such as <CODE>field</CODE> or <CODE>value</CODE> other than as the first
+element of a list, it assumes it's the name of a variable and looks
+up its value. That's fine for <CODE>field</CODE> and <CODE>value</CODE>; it's
+exactly what you want. But it will treat <CODE>equal</CODE>, <CODE>getf</CODE>,
+and <CODE>cd</CODE> the same way, which <I>isn't</I> what you want. However,
+you also know how to stop Lisp from evaluating a form: stick a single
+forward quote (<CODE>'</CODE>) in front of it. So if you write
+<CODE>make-comparison-expr</CODE> like this, it will do what you want: </P><PRE>(defun make-comparison-expr (field value)
+  (list 'equal (list 'getf 'cd field) value))</PRE><P>You can test it out in the REPL.</P><PRE>CL-USER&gt; (make-comparison-expr :rating 10)
+(EQUAL (GETF CD :RATING) 10)
+CL-USER&gt; (make-comparison-expr :title &quot;Give Us a Break&quot;)
+(EQUAL (GETF CD :TITLE) &quot;Give Us a Break&quot;)</PRE><P>It turns out that there's an even better way to do it. What you'd
+really like is a way to write an expression that's mostly not
+evaluated and then have some way to pick out a few expressions that
+you <I>do</I> want evaluated. And, of course, there's just such a
+mechanism. A back quote (<CODE>`</CODE>) before an expression stops
+evaluation just like a forward quote.</P><PRE>CL-USER&gt; `(1 2 3)
+(1 2 3)
+CL-USER&gt; '(1 2 3)
+(1 2 3)</PRE><P>However, in a back-quoted expression, any subexpression that's
+preceded by a comma is evaluated. Notice the effect of the comma in
+the second expression:</P><PRE>`(1 2 (+ 1 2))        ==&gt; (1 2 (+ 1 2))
+`(1 2 ,(+ 1 2))       ==&gt; (1 2 3)</PRE><P>Using a back quote, you can write <CODE>make-comparison-expr</CODE> like
+this: </P><PRE>(defun make-comparison-expr (field value)
+  `(equal (getf cd ,field) ,value))</PRE><P>Now if you look back to the hand-optimized selector function, you can
+see that the body of the function consisted of one comparison
+expression per field/value pair, all wrapped in an <CODE><B>AND</B></CODE>
+expression. Assume for the moment that you'll arrange for the
+arguments to the <CODE>where</CODE> macro to be passed as a single list.
+You'll need a function that can take the elements of such a list
+pairwise and collect the results of calling
+<CODE>make-comparison-expr</CODE> on each pair. To implement that function,
+you can dip into the bag of advanced Lisp tricks and pull out the
+mighty and powerful <CODE>LOOP</CODE> macro.</P><PRE>(defun make-comparisons-list (fields)
+  (loop while fields
+     collecting (make-comparison-expr (pop fields) (pop fields))))</PRE><P>A full discussion of <CODE>LOOP</CODE> will have to wait until Chapter 22;
+for now just note that this <CODE>LOOP</CODE> expression does exactly what
+you need: it loops while there are elements left in the <CODE>fields</CODE>
+list, popping off two at a time, passing them to
+<CODE>make-comparison-expr</CODE>, and collecting the results to be
+returned at the end of the loop. The <CODE><B>POP</B></CODE> macro performs the
+inverse operation of the <CODE>PUSH</CODE> macro you used to add records to
+<CODE>*db*</CODE>.</P><P>Now you just need to wrap up the list returned by
+<CODE>make-comparison-list</CODE> in an <CODE>AND</CODE> and an anonymous
+function, which you can do in the <CODE>where</CODE> macro itself. Using a
+back quote to make a template that you fill in by interpolating the
+value of <CODE>make-comparisons-list</CODE>, it's trivial.</P><PRE>(defmacro where (&amp;rest clauses)
+  `#'(lambda (cd) (and ,@(make-comparisons-list clauses))))</PRE><P>This macro uses a variant of <CODE>,</CODE> (namely, the <CODE>,@</CODE>) before
+the call to <CODE>make-comparisons-list</CODE>. The <CODE>,@</CODE> &quot;splices&quot; the
+value of the following expression--which must evaluate to a
+list--into the enclosing list. You can see the difference between
+<CODE>,</CODE> and <CODE>,@</CODE> in the following two expressions: </P><PRE>`(and ,(list 1 2 3))   ==&gt; (AND (1 2 3))
+`(and ,@(list 1 2 3))  ==&gt; (AND 1 2 3)</PRE><P>You can also use <CODE>,@</CODE> to splice into the middle of a list.</P><PRE>`(and ,@(list 1 2 3) 4) ==&gt; (AND 1 2 3 4)</PRE><P>The other important feature of the <CODE>where</CODE> macro is the use of
+<CODE>&amp;rest</CODE> in the argument list. Like <CODE>&amp;key</CODE>, <CODE>&amp;rest</CODE>
+modifies the way arguments are parsed. With a <CODE>&amp;rest</CODE> in its
+parameter list, a function or macro can take an arbitrary number of
+arguments, which are collected into a single list that becomes the
+value of the variable whose name follows the <CODE>&amp;rest</CODE>. So if you
+call <CODE>where</CODE> like this:</P><PRE>(where :title &quot;Give Us a Break&quot; :ripped t)</PRE><P>the variable <CODE>clauses</CODE> will contain the list.</P><PRE>(:title &quot;Give Us a Break&quot; :ripped t)</PRE><P>This list is passed to <CODE>make-comparisons-list</CODE>, which returns a
+list of comparison expressions. You can see exactly what code a call
+to <CODE>where</CODE> will generate using the function <CODE><B>MACROEXPAND-1</B></CODE>.
+If you pass <CODE><B>MACROEXPAND-1</B></CODE>, a form representing a macro call, it
+will call the macro code with appropriate arguments and return the
+expansion. So you can check out the previous <CODE>where</CODE> call like
+this: </P><PRE>CL-USER&gt; (macroexpand-1 '(where :title &quot;Give Us a Break&quot; :ripped t))
+#'(LAMBDA (CD)
+    (AND (EQUAL (GETF CD :TITLE) &quot;Give Us a Break&quot;)
+         (EQUAL (GETF CD :RIPPED) T)))
+T</PRE><P>Looks good. Let's try it for real.</P><PRE>CL-USER&gt; (select (where :title &quot;Give Us a Break&quot; :ripped t))
+((:TITLE &quot;Give Us a Break&quot; :ARTIST &quot;Limpopo&quot; :RATING 10 :RIPPED T))</PRE><P>It works. And the <CODE>where</CODE> macro with its two helper functions is
+actually one line shorter than the old <CODE>where</CODE> function. And
+it's more general in that it's no longer tied to the specific fields
+in our CD records. </P><A NAME="wrapping-up"><H2>Wrapping Up</H2></A><P>Now, an interesting thing has happened. You removed duplication and
+made the code more efficient <I>and</I> more general at the same time.
+That's often the way it goes with a well-chosen macro. This makes
+sense because a macro is just another mechanism for creating
+abstractions--abstraction at the syntactic level, and abstractions are
+by definition more concise ways of expressing underlying generalities.
+Now the only code in the mini-database that's specific to CDs and the
+fields in them is in the <CODE>make-cd</CODE>, <CODE>prompt-for-cd</CODE>, and
+<CODE>add-cd</CODE> functions. In fact, our new <CODE>where</CODE> macro would
+work with any plist-based database.</P><P>However, this is still far from being a complete database. You can
+probably think of plenty of features to add, such as supporting
+multiple tables or more elaborate queries. In Chapter 27 we'll build
+an MP3 database that incorporates some of those features.</P><P>The point of this chapter was to give you a quick introduction to
+just a handful of Lisp's features and show how they're used to write
+code that's a bit more interesting than &quot;hello, world.&quot; In the next
+chapter we'll begin a more systematic overview of Lisp.
+</P><HR/><DIV CLASS="notes"><P><SUP>1</SUP>Before I
+proceed, however, it's crucially important that you forget anything
+you may know about #define-style &quot;macros&quot; as implemented in the C
+pre-processor. Lisp macros are a totally different beast.</P><P><SUP>2</SUP>Using a global variable also
+has some drawbacks--for instance, you can have only one database at a
+time. In Chapter 27, with more of the language under your belt,
+you'll be ready to build a more flexible database. You'll also see,
+in Chapter 6, how even using a global variable is more flexible in
+Common Lisp than it may be in other languages.</P><P><SUP>3</SUP>One of the
+coolest <CODE><B>FORMAT</B></CODE> directives is the <CODE>~R</CODE> directive. Ever want
+to know how to say a really big number in English words? Lisp knows.
+Evaluate this:</P><PRE>(format nil &quot;~r&quot; 1606938044258990275541962092)</PRE><P>and you should get back (wrapped for legibility):</P><BLOCKQUOTE>&quot;one octillion six hundred six septillion nine hundred thirty-eight
+sextillion forty-four quintillion two hundred fifty-eight
+quadrillion nine hundred ninety trillion two hundred seventy-five
+billion five hundred forty-one million nine hundred sixty-two
+thousand ninety-two&quot;</BLOCKQUOTE><P><SUP>4</SUP>Windows
+actually understands forward slashes in filenames even though it
+normally uses a backslash as the directory separator. This is
+convenient since otherwise you have to write double backslashes
+because backslash is the escape character in Lisp strings.</P><P><SUP>5</SUP>The word lambda
+is used in Lisp because of an early connection to the lambda
+calculus, a mathematical formalism invented for studying mathematical
+functions.</P><P><SUP>6</SUP>The technical term for a function that references a
+variable in its enclosing scope is a closure because the function
+&quot;closes over&quot; the variable. I'll discuss closures in more detail in
+Chapter 6.</P><P><SUP>7</SUP>Note
+that in Lisp, an IF form, like everything else, is an expression that
+returns a value. It's actually more like the ternary operator
+(<CODE>?:</CODE>) in Perl, Java, and C in that this is legal in those
+languages:</P><PRE>some_var = some_boolean ? value1 : value2;</PRE><P>while this isn't:</P><PRE>some_var = if (some_boolean) value1; else value2;</PRE><P>because in those languages, <CODE>if</CODE> is a statement, not an
+expression.</P><P><SUP>8</SUP>You need to use the name <CODE>delete-rows</CODE>
+rather than the more obvious <CODE>delete</CODE> because there's already a
+function in Common Lisp called <CODE><B>DELETE</B></CODE>. The Lisp package system
+gives you a way to deal with such naming conflicts, so you could have
+a function named delete if you wanted. But I'm not ready to explain
+packages just yet.</P><P><SUP>9</SUP>If you're worried that this code creates a memory
+leak, rest assured: Lisp was the language that invented garbage
+collection (and heap allocation for that matter). The memory used by
+the old value of <CODE>*db*</CODE> will be automatically reclaimed,
+assuming no one else is holding on to a reference to it, which none
+of this code is.</P><P><SUP>10</SUP>A friend of mine was
+once interviewing an engineer for a programming job and asked him a
+typical interview question: how do you know when a function or method
+is too big? Well, said the candidate, I don't like any method to be
+bigger than my head. You mean you can't keep all the details in your
+head? No, I mean I put my head up against my monitor, and the code
+shouldn't be bigger than my head.</P><P><SUP>11</SUP>It's unlikely that the cost of checking whether keyword
+parameters had been passed would be a detectible drag on performance
+since checking whether a variable is <CODE>NIL</CODE> is going to be pretty
+cheap. On the other hand, these functions returned by <CODE>where</CODE>
+are going to be right in the middle of the inner loop of any
+<CODE>select</CODE>, <CODE>update</CODE>, or <CODE>delete-rows</CODE> call, as they
+have to be called once per entry in the database. Anyway, for
+illustrative purposes, this will have to do.</P><P><SUP>12</SUP>Macros are also run by the
+interpreter--however, it's easier to understand the point of macros
+when you think about compiled code. As with everything else in this
+chapter, I'll cover this in greater detail in future chapters.</P></DIV></BODY></HTML>

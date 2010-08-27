@@ -1,0 +1,619 @@
+<HTML><HEAD><TITLE>Files and File I/O</TITLE><LINK REL="stylesheet" TYPE="text/css" HREF="style.css"/></HEAD><BODY><DIV CLASS="copyright">Copyright &copy; 2003-2005, Peter Seibel</DIV><H1>14. Files and File I/O</H1><P>Common Lisp provides a rich library of functionality for dealing with
+files. In this chapter I'll focus on a few basic file-related tasks:
+reading and writing files and listing files in the file system. For
+these basic tasks, Common Lisp's I/O facilities are similar to those
+in other languages. Common Lisp provides a stream abstraction for
+reading and writing data and an abstraction, called <I>pathnames</I>, for
+manipulating filenames in an operating system-independent way.
+Additionally, Common Lisp provides other bits of functionality unique
+to Lisp such as the ability to read and write s-expressions.</P><A NAME="reading-file-data"><H2>Reading File Data</H2></A><P>The most basic file I/O task is to read the contents of a file. You
+obtain a stream from which you can read a file's contents with the
+<CODE><B>OPEN</B></CODE> function. By default <CODE><B>OPEN</B></CODE> returns a character-based
+input stream you can pass to a variety of functions that read one or
+more characters of text: <CODE><B>READ-CHAR</B></CODE> reads a single character;
+<CODE><B>READ-LINE</B></CODE> reads a line of text, returning it as a string with
+the end-of-line character(s) removed; and <CODE><B>READ</B></CODE> reads a single
+s-expression, returning a Lisp object. When you're done with the
+stream, you can close it with the <CODE><B>CLOSE</B></CODE> function.</P><P>The only required argument to <CODE><B>OPEN</B></CODE> is the name of the file to
+read. As you'll see in the section &quot;Filenames,&quot; Common Lisp provides
+a couple of ways to represent a filename, but the simplest is to use
+a string containing the name in the local file-naming syntax. So
+assuming that <CODE>/some/file/name.txt</CODE> is a file, you can open it
+like this:</P><PRE>(open &quot;/some/file/name.txt&quot;)</PRE><P>You can use the object returned as the first argument to any of the
+read functions. For instance, to print the first line of the file,
+you can combine <CODE><B>OPEN</B></CODE>, <CODE><B>READ-LINE</B></CODE>, and <CODE><B>CLOSE</B></CODE> as follows:</P><PRE>(let ((in (open &quot;/some/file/name.txt&quot;)))
+  (format t &quot;~a~%&quot; (read-line in))
+  (close in))</PRE><P>Of course, a number of things can go wrong while trying to open and
+read from a file. The file may not exist. Or you may unexpectedly hit
+the end of the file while reading. By default <CODE><B>OPEN</B></CODE> and the
+<CODE>READ-*</CODE> functions will signal an error in these situations. In
+Chapter 19, I'll discuss how to recover from such errors. For now,
+however, there's a lighter-weight solution: each of these functions
+accepts arguments that modify its behavior in these exceptional
+situations.</P><P>If you want to open a possibly nonexistent file without <CODE><B>OPEN</B></CODE>
+signaling an error, you can use the keyword argument
+<CODE>:if-does-not-exist</CODE> to specify a different behavior. The three
+possible values are <CODE>:error</CODE>, the default; <CODE>:create</CODE>, which
+tells it to go ahead and create the file and then proceed as if it
+had already existed; and <CODE><B>NIL</B></CODE>, which tells it to return <CODE><B>NIL</B></CODE>
+instead of a stream. Thus, you can change the previous example to
+deal with the possibility that the file may not exist. </P><PRE>(let ((in (open &quot;/some/file/name.txt&quot; :if-does-not-exist nil)))
+  (when in
+    (format t &quot;~a~%&quot; (read-line in))
+    (close in)))</PRE><P>The reading functions--<CODE><B>READ-CHAR</B></CODE>, <CODE><B>READ-LINE</B></CODE>, and
+<CODE><B>READ</B></CODE>--all take an optional argument, which defaults to true,
+that specifies whether they should signal an error if they're called
+at the end of the file. If that argument is <CODE><B>NIL</B></CODE>, they instead
+return the value of their third argument, which defaults to <CODE><B>NIL</B></CODE>.
+Thus, you could print all the lines in a file like this:</P><PRE>(let ((in (open &quot;/some/file/name.txt&quot; :if-does-not-exist nil)))
+  (when in
+    (loop for line = (read-line in nil)
+         while line do (format t &quot;~a~%&quot; line))
+    (close in)))</PRE><P>Of the three text-reading functions, <CODE><B>READ</B></CODE> is unique to Lisp.
+This is the same function that provides the <I>R</I> in the REPL and
+that's used to read Lisp source code. Each time it's called, it reads
+a single s-expression, skipping whitespace and comments, and returns
+the Lisp object denoted by the s-expression. For instance, suppose
+<CODE>/some/file/name.txt</CODE> has the following contents: </P><PRE>(1 2 3)
+456
+&quot;a string&quot; ; this is a comment
+((a b)
+ (c d))</PRE><P>In other words, it contains four s-expressions: a list of numbers, a
+number, a string, and a list of lists. You can read those expressions
+like this:</P><PRE>CL-USER&gt; (defparameter *s* (open &quot;/some/file/name.txt&quot;))
+*S*
+CL-USER&gt; (read *s*)
+(1 2 3)
+CL-USER&gt; (read *s*)
+456
+CL-USER&gt; (read *s*)
+&quot;a string&quot;
+CL-USER&gt; (read *s*)
+((A B) (C D))
+CL-USER&gt; (close *s*)
+T</PRE><P>As you saw in Chapter 3, you can use <CODE><B>PRINT</B></CODE> to print Lisp objects
+in &quot;readable&quot; form. Thus, whenever you need to store a bit of data in
+a file, <CODE><B>PRINT</B></CODE> and <CODE><B>READ</B></CODE> provide an easy way to do it without
+having to design a data format or write a parser. They even--as the
+previous example demonstrated--give you comments for free. And
+because s-expressions were designed to be human editable, it's also a
+fine format for things like configuration files.<SUP>1</SUP> </P><A NAME="reading-binary-data"><H2>Reading Binary Data</H2></A><P>By default <CODE><B>OPEN</B></CODE> returns character streams, which translate the
+underlying bytes to characters according to a particular
+character-encoding scheme.<SUP>2</SUP> To read the raw
+bytes, you need to pass <CODE><B>OPEN</B></CODE> an <CODE>:element-type</CODE> argument of
+<CODE>'(unsigned-byte 8)</CODE>.<SUP>3</SUP>
+You can pass the resulting stream to the function <CODE><B>READ-BYTE</B></CODE>,
+which will return an integer between 0 and 255 each time it's called.
+<CODE><B>READ-BYTE</B></CODE>, like the character-reading functions, also accepts
+optional arguments to specify whether it should signal an error if
+called at the end of the file and what value to return if not. In
+Chapter 24 you'll build a library that allows you to conveniently
+read structured binary data using <CODE><B>READ-BYTE</B></CODE>.<SUP>4</SUP> </P><A NAME="bulk-reads"><H2>Bulk Reads</H2></A><P>One last reading function, <CODE><B>READ-SEQUENCE</B></CODE>, works with both
+character and binary streams. You pass it a sequence (typically a
+vector) and a stream, and it attempts to fill the sequence with data
+from the stream. It returns the index of the first element of the
+sequence that wasn't filled or the length of the sequence if it was
+able to completely fill it. You can also pass <CODE>:start</CODE> and
+<CODE>:end</CODE> keyword arguments to specify a subsequence that should be
+filled instead. The sequence argument must be a type that can hold
+elements of the stream's element type. Since most operating systems
+support some form of block I/O, <CODE><B>READ-SEQUENCE</B></CODE> is likely to be
+quite a bit more efficient than filling a sequence by repeatedly
+calling <CODE><B>READ-BYTE</B></CODE> or <CODE><B>READ-CHAR</B></CODE>.</P><A NAME="file-output"><H2>File Output</H2></A><P>To write data to a file, you need an output stream, which you obtain
+by calling <CODE><B>OPEN</B></CODE> with a <CODE>:direction</CODE> keyword argument of
+<CODE>:output</CODE>. When opening a file for output, <CODE><B>OPEN</B></CODE> assumes the
+file shouldn't already exist and will signal an error if it does.
+However, you can change that behavior with the <CODE>:if-exists</CODE>
+keyword argument. Passing the value <CODE>:supersede</CODE> tells <CODE><B>OPEN</B></CODE>
+to replace the existing file. Passing <CODE>:append</CODE> causes <CODE><B>OPEN</B></CODE>
+to open the existing file such that new data will be written at the
+end of the file, while <CODE>:overwrite</CODE> returns a stream that will
+overwrite existing data starting from the beginning of the file. And
+passing <CODE><B>NIL</B></CODE> will cause <CODE><B>OPEN</B></CODE> to return <CODE><B>NIL</B></CODE> instead of a
+stream if the file already exists. A typical use of <CODE><B>OPEN</B></CODE> for
+output looks like this:</P><PRE>(open &quot;/some/file/name.txt&quot; :direction :output :if-exists :supersede)</PRE><P>Common Lisp also provides several functions for writing data:
+<CODE><B>WRITE-CHAR</B></CODE> writes a single character to the stream.
+<CODE><B>WRITE-LINE</B></CODE> writes a string followed by a newline, which will be
+output as the appropriate end-of-line character or characters for the
+platform. Another function, <CODE><B>WRITE-STRING</B></CODE>, writes a string
+without adding any end-of-line characters. Two different functions
+can print just a newline: <CODE><B>TERPRI</B></CODE>--short for &quot;terminate
+print&quot;--unconditionally prints a newline character, and
+<CODE><B>FRESH-LINE</B></CODE> prints a newline character unless the stream is at
+the beginning of a line. <CODE><B>FRESH-LINE</B></CODE> is handy when you want to
+avoid spurious blank lines in textual output generated by different
+functions called in sequence. For example, suppose you have one
+function that generates output that should always be followed by a
+line break and another that should start on a new line. But assume
+that if the functions are called one after the other, you don't want
+a blank line between the two bits of output. If you use
+<CODE><B>FRESH-LINE</B></CODE> at the beginning of the second function, its output
+will always start on a new line, but if it's called right after the
+first, it won't emit an extra line break. </P><P>Several functions output Lisp data as s-expressions: <CODE><B>PRINT</B></CODE>
+prints an s-expression preceded by an end-of-line and followed by a
+space. <CODE><B>PRIN1</B></CODE> prints just the s-expression. And the function
+<CODE><B>PPRINT</B></CODE> prints s-expressions like <CODE><B>PRINT</B></CODE> and <CODE><B>PRIN1</B></CODE> but
+using the &quot;pretty printer,&quot; which tries to print its output in an
+aesthetically pleasing way.</P><P>However, not all objects can be printed in a form that <CODE><B>READ</B></CODE> will
+understand. The variable <CODE><B>*PRINT-READABLY*</B></CODE> controls what happens
+if you try to print such an object with <CODE><B>PRINT</B></CODE>, <CODE><B>PRIN1</B></CODE>, or
+<CODE><B>PPRINT</B></CODE>. When it's <CODE><B>NIL</B></CODE>, these functions will print the
+object in a special syntax that's guaranteed to cause <CODE><B>READ</B></CODE> to
+signal an error if it tries to read it; otherwise they will signal an
+error rather than print the object.</P><P>Another function, <CODE><B>PRINC</B></CODE>, also prints Lisp objects, but in a way
+designed for human consumption. For instance, <CODE><B>PRINC</B></CODE> prints
+strings without quotation marks. You can generate more elaborate text
+output with the incredibly flexible if somewhat arcane <CODE><B>FORMAT</B></CODE>
+function. I'll discuss some of the more important details of
+<CODE><B>FORMAT</B></CODE>, which essentially defines a mini-language for emitting
+formatted output, in Chapter 18.</P><P>To write binary data to a file, you have to <CODE><B>OPEN</B></CODE> the file with
+the same <CODE>:element-type</CODE> argument as you did to read it:
+<CODE>'(unsigned-byte 8)</CODE>. You can then write individual bytes to the
+stream with <CODE><B>WRITE-BYTE</B></CODE>.</P><P>The bulk output function <CODE><B>WRITE-SEQUENCE</B></CODE> accepts both binary and
+character streams as long as all the elements of the sequence are of
+an appropriate type for the stream, either characters or bytes. As
+with <CODE><B>READ-SEQUENCE</B></CODE>, this function is likely to be quite a bit
+more efficient than writing the elements of the sequence one at a
+time. </P><A NAME="closing-files"><H2>Closing Files</H2></A><P>As anyone who has written code that deals with lots of files knows,
+it's important to close files when you're done with them, because
+file handles tend to be a scarce resource. If you open files and
+don't close them, you'll soon discover you can't open any more
+files.<SUP>5</SUP> It might seem
+straightforward enough to just be sure every <CODE><B>OPEN</B></CODE> has a matching
+<CODE><B>CLOSE</B></CODE>. For instance, you could always structure your file using
+code like this:</P><PRE>(let ((stream (open &quot;/some/file/name.txt&quot;)))
+  ;; do stuff with stream
+  (close stream))</PRE><P>However, this approach suffers from two problems. One is simply that
+it's error prone--if you forget the <CODE><B>CLOSE</B></CODE>, the code will leak a
+file handle every time it runs. The other--and more
+significant--problem is that there's no guarantee you'll get to the
+<CODE><B>CLOSE</B></CODE>. For instance, if the code prior to the <CODE><B>CLOSE</B></CODE>
+contains a <CODE><B>RETURN</B></CODE> or <CODE><B>RETURN-FROM</B></CODE>, you could leave the
+<CODE><B>LET</B></CODE> without closing the stream. Or, as you'll see in Chapter 19,
+if any of the code before the <CODE><B>CLOSE</B></CODE> signals an error, control
+may jump out of the <CODE><B>LET</B></CODE> to an error handler and never come back
+to close the stream.</P><P>Common Lisp provides a general solution to the problem of how to
+ensure that certain code always runs: the special operator
+<CODE><B>UNWIND-PROTECT</B></CODE>, which I'll discuss in Chapter 20. However,
+because the pattern of opening a file, doing something with the
+resulting stream, and then closing the stream is so common, Common
+Lisp provides a macro, <CODE><B>WITH-OPEN-FILE</B></CODE>, built on top of
+<CODE><B>UNWIND-PROTECT</B></CODE>, to encapsulate this pattern. This is the basic
+form: </P><PRE>(with-open-file (<I>stream-var</I> <I>open-argument*</I>)
+  <I>body-form*</I>)</PRE><P>The forms in <I>body-forms</I> are evaluated with <I>stream-var</I> bound
+to a file stream opened by a call to <CODE><B>OPEN</B></CODE> with
+<I>open-arguments</I> as its arguments. <CODE><B>WITH-OPEN-FILE</B></CODE> then ensures
+the stream in <I>stream-var</I> is closed before the <CODE><B>WITH-OPEN-FILE</B></CODE>
+form returns. Thus, you can write this to read a line from a file:</P><PRE>(with-open-file (stream &quot;/some/file/name.txt&quot;)
+  (format t &quot;~a~%&quot; (read-line stream)))</PRE><P>To create a new file, you can write something like this:</P><PRE>(with-open-file (stream &quot;/some/file/name.txt&quot; :direction :output)
+  (format stream &quot;Some text.&quot;))</PRE><P>You'll probably use <CODE><B>WITH-OPEN-FILE</B></CODE> for 90-99 percent of the file
+I/O you do--the only time you need to use raw <CODE><B>OPEN</B></CODE> and
+<CODE><B>CLOSE</B></CODE> calls is if you need to open a file in a function and keep
+the stream around after the function returns. In that case, you must
+take care to eventually close the stream yourself, or you'll leak
+file descriptors and may eventually end up unable to open any more
+files. </P><A NAME="filenames"><H2>Filenames</H2></A><P>So far you've used strings to represent filenames. However, using
+strings as filenames ties your code to a particular operating system
+and file system. Likewise, if you programmatically construct names
+according to the rules of a particular naming scheme (separating
+directories with /, say), you also tie your code to a particular file
+system.</P><P>To avoid this kind of nonportability, Common Lisp provides another
+representation of filenames: pathname objects. Pathnames represent
+filenames in a structured way that makes them easy to manipulate
+without tying them to a particular filename syntax. And the burden of
+translating back and forth between strings in the local syntax--called
+<I>namestrings</I>--and pathnames is placed on the Lisp implementation.</P><P>Unfortunately, as with many abstractions designed to hide the details
+of fundamentally different underlying systems, the pathname
+abstraction introduces its own complications. When pathnames were
+designed, the set of file systems in general use was quite a bit more
+variegated than those in common use today. Consequently, some nooks
+and crannies of the pathname abstraction make little sense if all
+you're concerned about is representing Unix or Windows filenames.
+However, once you understand which parts of the pathname abstraction
+you can ignore as artifacts of pathnames' evolutionary history, they
+do provide a convenient way to manipulate filenames.<SUP>6</SUP> </P><P>Most places a filename is called for, you can use either a namestring
+or a pathname. Which to use depends mostly on where the name
+originated. Filenames provided by the user--for example, as arguments
+or as values in configuration files--will typically be namestrings,
+since the user knows what operating system they're running on and
+shouldn't be expected to care about the details of how Lisp
+represents filenames. But programmatically generated filenames will
+be pathnames because you can create them portably. A stream returned
+by <CODE><B>OPEN</B></CODE> also represents a filename, namely, the filename that
+was originally used to open the stream. Together these three types
+are collectively referred to as <I>pathname designators</I>. All the
+built-in functions that expect a filename argument accept all three
+types of pathname designator. For instance, all the places in the
+previous section where you used a string to represent a filename, you
+could also have passed a pathname object or a stream. </P><DIV CLASS="sidebarhead">How We Got Here</DIV><DIV CLASS="sidebar"><P>The historical diversity of file systems in existence during
+the 70s and 80s can be easy to forget. Kent Pitman, one of the
+principal technical editors of the Common Lisp standard, described
+the situation once in comp.lang.lisp (Message-ID:
+<CODE>sfwzo74np6w.fsf@world.std.com</CODE>) thusly:</P><BLOCKQUOTE>The dominant file systems at the time the design [of Common Lisp]
+was done were TOPS-10, TENEX, TOPS-20, VAX VMS, AT&amp;T Unix, MIT
+Multics, MIT ITS, not to mention a bunch of mainframe [OSs]. Some
+were uppercase only, some mixed, some were case-sensitive but case-
+translating (like CL). Some had dirs as files, some not. Some had
+quote chars for funny file chars, some not. Some had wildcards,
+some didn't. Some had :up in relative pathnames, some didn't. Some
+had namable root dirs, some didn't. There were file systems with no
+directories, file systems with non-hierarchical directories, file
+systems with no file types, file systems with no versions, file
+systems with no devices, and so on. </BLOCKQUOTE><P>If you look at the pathname abstraction from the point of view of any
+single file system, it seems baroque. However, if you take even two
+such similar file systems as Windows and Unix, you can already begin
+to see differences the pathname system can help abstract
+away--Windows filenames contain a drive letter, for instance, while
+Unix filenames don't. The other advantage of having the pathname
+abstraction designed to handle the wide variety of file systems that
+existed in the past is that it's more likely to be able to handle
+file systems that may exist in the future. If, say, versioning file
+systems come back into vogue, Common Lisp will be ready.</P></DIV><A NAME="how-pathnames-represent-filenames"><H2>How Pathnames Represent Filenames</H2></A><P>A pathname is a structured object that represents a filename using
+six components: host, device, directory, name, type, and version.
+Most of these components take on atomic values, usually strings; only
+the directory component is further structured, containing a list of
+directory names (as strings) prefaced with the keyword
+<CODE>:absolute</CODE> or <CODE>:relative</CODE>. However, not all pathname
+components are needed on all platforms--this is one of the reasons
+pathnames strike many new Lispers as gratuitously complex. On the
+other hand, you don't really need to worry about which components may
+or may not be used to represent names on a particular file system
+unless you need to create a new pathname object from scratch, which
+you'll almost never need to do. Instead, you'll usually get hold of
+pathname objects either by letting the implementation parse a file
+system-specific namestring into a pathname object or by creating a
+new pathname that takes most of its components from an existing
+pathname.</P><P>For instance, to translate a namestring to a pathname, you use the
+<CODE><B>PATHNAME</B></CODE> function. It takes a pathname designator and returns an
+equivalent pathname object. When the designator is already a
+pathname, it's simply returned. When it's a stream, the original
+filename is extracted and returned. When the designator is a
+namestring, however, it's parsed according to the local filename
+syntax. The language standard, as a platform-neutral document,
+doesn't specify any particular mapping from namestring to pathname,
+but most implementations follow the same conventions on a given
+operating system. </P><P>On Unix file systems, only the directory, name, and type components
+are typically used. On Windows, one more component--usually the
+device or host--holds the drive letter. On these platforms, a
+namestring is parsed by first splitting it into elements on the path
+separator--a slash on Unix and a slash or backslash on Windows. The
+drive letter on Windows will be placed into either the device or the
+host component. All but the last of the other name elements are
+placed in a list starting with <CODE>:absolute</CODE> or <CODE>:relative</CODE>
+depending on whether the name (ignoring the drive letter, if any)
+began with a path separator. This list becomes the directory
+component of the pathname. The last element is then split on the
+rightmost dot, if any, and the two parts put into the name and type
+components of the pathname.<SUP>7</SUP></P><P>You can examine these individual components of a pathname with the
+functions <CODE><B>PATHNAME-DIRECTORY</B></CODE>, <CODE><B>PATHNAME-NAME</B></CODE>, and
+<CODE><B>PATHNAME-TYPE</B></CODE>.</P><PRE>(pathname-directory (pathname &quot;/foo/bar/baz.txt&quot;)) ==&gt; (:ABSOLUTE &quot;foo&quot; &quot;bar&quot;)
+(pathname-name (pathname &quot;/foo/bar/baz.txt&quot;))      ==&gt; &quot;baz&quot;
+(pathname-type (pathname &quot;/foo/bar/baz.txt&quot;))      ==&gt; &quot;txt&quot;</PRE><P>Three other functions--<CODE><B>PATHNAME-HOST</B></CODE>, <CODE><B>PATHNAME-DEVICE</B></CODE>, and
+<CODE><B>PATHNAME-VERSION</B></CODE>--allow you to get at the other three pathname
+components, though they're unlikely to have interesting values on
+Unix. On Windows either <CODE><B>PATHNAME-HOST</B></CODE> or <CODE><B>PATHNAME-DEVICE</B></CODE>
+will return the drive letter. </P><P>Like many other built-in objects, pathnames have their own read
+syntax, <CODE>#p</CODE> followed by a double-quoted string. This allows you
+to print and read back s-expressions containing pathname objects, but
+because the syntax depends on the namestring parsing algorithm, such
+data isn't necessarily portable between operating systems.</P><PRE>(pathname &quot;/foo/bar/baz.txt&quot;) ==&gt; #p&quot;/foo/bar/baz.txt&quot;</PRE><P>To translate a pathname back to a namestring--for instance, to
+present to the user--you can use the function <CODE><B>NAMESTRING</B></CODE>, which
+takes a pathname designator and returns a namestring. Two other
+functions, <CODE><B>DIRECTORY-NAMESTRING</B></CODE> and <CODE><B>FILE-NAMESTRING</B></CODE>, return
+a partial namestring. <CODE><B>DIRECTORY-NAMESTRING</B></CODE> combines the elements
+of the directory component into a local directory name, and
+<CODE><B>FILE-NAMESTRING</B></CODE> combines the name and type components.<SUP>8</SUP> </P><PRE>(namestring #p&quot;/foo/bar/baz.txt&quot;)           ==&gt; &quot;/foo/bar/baz.txt&quot;
+(directory-namestring #p&quot;/foo/bar/baz.txt&quot;) ==&gt; &quot;/foo/bar/&quot;
+(file-namestring #p&quot;/foo/bar/baz.txt&quot;)      ==&gt; &quot;baz.txt&quot;</PRE><A NAME="constructing-new-pathnames"><H2>Constructing New Pathnames</H2></A><P>You can construct arbitrary pathnames using the <CODE><B>MAKE-PATHNAME</B></CODE>
+function. It takes one keyword argument for each pathname component
+and returns a pathname with any supplied components filled in and the
+rest <CODE><B>NIL</B></CODE>.<SUP>9</SUP></P><PRE>(make-pathname
+  :directory '(:absolute &quot;foo&quot; &quot;bar&quot;)
+  :name &quot;baz&quot;
+  :type &quot;txt&quot;) ==&gt; #p&quot;/foo/bar/baz.txt&quot;</PRE><P>However, if you want your programs to be portable, you probably don't
+want to make pathnames completely from scratch: even though the
+pathname abstraction protects you from unportable filename syntax,
+filenames can be unportable in other ways. For instance, the filename
+<CODE>/home/peter/foo.txt</CODE> is no good on an OS X box where
+<CODE>/home/</CODE> is called <CODE>/Users/</CODE>.</P><P>Another reason not to make pathnames completely from scratch is that
+different implementations use the pathname components slightly
+differently. For instance, as mentioned previously, some
+Windows-based Lisp implementations store the drive letter in the
+device component while others store it in the host component. If you
+write code like this:</P><PRE>(make-pathname :device &quot;c&quot; :directory '(:absolute &quot;foo&quot; &quot;bar&quot;) :name &quot;baz&quot;)</PRE><P>it will be correct on some implementations but not on others.</P><P>Rather than making names from scratch, you can build a new pathname
+based on an existing pathname with <CODE><B>MAKE-PATHNAME</B></CODE>'s keyword
+parameter <CODE>:defaults</CODE>. With this parameter you can provide a
+pathname designator, which will supply the values for any components
+not specified by other arguments. For example, the following
+expression creates a pathname with an <CODE>.html</CODE> extension and all
+other components the same as the pathname in the variable
+<CODE>input-file</CODE>:</P><PRE>(make-pathname :type &quot;html&quot; :defaults input-file)</PRE><P>Assuming the value in <CODE>input-file</CODE> was a user-provided name,
+this code will be robust in the face of operating system and
+implementation differences such as whether filenames have drive
+letters in them and where they're stored in a pathname if they
+do.<SUP>10</SUP></P><P>You can use the same technique to create a pathname with a different
+directory component.</P><PRE>(make-pathname :directory '(:relative &quot;backups&quot;) :defaults input-file)</PRE><P>However, this will create a pathname whose whole directory component
+is the relative directory <CODE>backups/</CODE>, regardless of any
+directory component <CODE>input-file</CODE> may have had. For example: </P><PRE>(make-pathname :directory '(:relative &quot;backups&quot;)
+               :defaults #p&quot;/foo/bar/baz.txt&quot;) ==&gt; #p&quot;backups/baz.txt&quot;</PRE><P>Sometimes, though, you want to combine two pathnames, at least one of
+which has a relative directory component, by combining their
+directory components. For instance, suppose you have a relative
+pathname such as <CODE>#p&quot;foo/bar.html&quot;</CODE> that you want to combine
+with an absolute pathname such as <CODE>#p&quot;/www/html/&quot;</CODE> to get
+<CODE>#p&quot;/www/html/foo/bar.html&quot;</CODE>. In that case, <CODE><B>MAKE-PATHNAME</B></CODE>
+won't do; instead, you want <CODE><B>MERGE-PATHNAMES</B></CODE>.</P><P><CODE><B>MERGE-PATHNAMES</B></CODE> takes two pathnames and merges them, filling in
+any <CODE><B>NIL</B></CODE> components in the first pathname with the corresponding
+value from the second pathname, much like <CODE><B>MAKE-PATHNAME</B></CODE> fills in
+any unspecified components with components from the <CODE>:defaults</CODE>
+argument. However, <CODE><B>MERGE-PATHNAMES</B></CODE> treats the directory
+component specially: if the first pathname's directory is relative,
+the directory component of the resulting pathname will be the first
+pathname's directory relative to the second pathname's directory.
+Thus: </P><PRE>(merge-pathnames #p&quot;foo/bar.html&quot; #p&quot;/www/html/&quot;) ==&gt; #p&quot;/www/html/foo/bar.html&quot;</PRE><P>The second pathname can also be relative, in which case the resulting
+pathname will also be relative.</P><PRE>(merge-pathnames #p&quot;foo/bar.html&quot; #p&quot;html/&quot;) ==&gt; #p&quot;html/foo/bar.html&quot;</PRE><P>To reverse this process and obtain a filename relative to a
+particular root directory, you can use the handy function
+<CODE><B>ENOUGH-NAMESTRING</B></CODE>.</P><PRE>(enough-namestring #p&quot;/www/html/foo/bar.html&quot; #p&quot;/www/&quot;) ==&gt; &quot;html/foo/bar.html&quot;</PRE><P>You can then combine <CODE><B>ENOUGH-NAMESTRING</B></CODE> with <CODE><B>MERGE-PATHNAMES</B></CODE>
+to create a pathname representing the same name but in a different
+root. </P><PRE>(merge-pathnames
+  (enough-namestring #p&quot;/www/html/foo/bar/baz.html&quot; #p&quot;/www/&quot;)
+  #p&quot;/www-backups/&quot;) ==&gt; #p&quot;/www-backups/html/foo/bar/baz.html&quot;</PRE><P><CODE><B>MERGE-PATHNAMES</B></CODE> is also used internally by the standard
+functions that actually access files in the file system to fill in
+incomplete pathnames. For instance, suppose you make a pathname with
+just a name and a type.</P><PRE>(make-pathname :name &quot;foo&quot; :type &quot;txt&quot;) ==&gt; #p&quot;foo.txt&quot;</PRE><P>If you try to use this pathname as an argument to <CODE><B>OPEN</B></CODE>, the
+missing components, such as the directory, must be filled in before
+Lisp will be able to translate the pathname to an actual filename.
+Common Lisp will obtain values for the missing components by merging
+the given pathname with the value of the variable
+<CODE><B>*DEFAULT-PATHNAME-DEFAULTS*</B></CODE>. The initial value of this variable
+is determined by the implementation but is usually a pathname with a
+directory component representing the directory where Lisp was started
+and appropriate values for the host and device components, if needed.
+If invoked with just one argument, <CODE><B>MERGE-PATHNAMES</B></CODE> will merge
+the argument with the value of <CODE><B>*DEFAULT-PATHNAME-DEFAULTS*</B></CODE>. For
+instance, if <CODE><B>*DEFAULT-PATHNAME-DEFAULTS*</B></CODE> is
+<CODE>#p&quot;/home/peter/&quot;</CODE>, then you'd get the following: </P><PRE>(merge-pathnames #p&quot;foo.txt&quot;) ==&gt; #p&quot;/home/peter/foo.txt&quot;</PRE><A NAME="two-representations-of-directory-names"><H2>Two Representations of Directory Names</H2></A><P>When dealing with pathnames that name directories, you need to be
+aware of one wrinkle. Pathnames separate the directory and name
+components, but Unix and Windows consider directories just another
+kind of file. Thus, on those systems, every directory has two
+different pathname representations.</P><P>One representation, which I'll call <I>file form</I>, treats a directory
+like any other file and puts the last element of the namestring into
+the name and type components. The other representation, <I>directory
+form</I>, places all the elements of the name in the directory
+component, leaving the name and type components <CODE><B>NIL</B></CODE>. If
+<CODE>/foo/bar/</CODE> is a directory, then both of the following pathnames
+name it.</P><PRE>(make-pathname :directory '(:absolute &quot;foo&quot;) :name &quot;bar&quot;) ; file form
+(make-pathname :directory '(:absolute &quot;foo&quot; &quot;bar&quot;))       ; directory form</PRE><P>When you create pathnames with <CODE><B>MAKE-PATHNAME</B></CODE>, you can control
+which form you get, but you need to be careful when dealing with
+namestrings. All current implementations create file form pathnames
+unless the namestring ends with a path separator. But you can't rely
+on user-supplied namestrings necessarily being in one form or
+another. For instance, suppose you've prompted the user for a
+directory to save a file in and they entered <CODE>&quot;/home/peter&quot;</CODE>. If
+you pass that value as the <CODE>:defaults</CODE> argument of
+<CODE><B>MAKE-PATHNAME</B></CODE> like this: </P><PRE>(make-pathname :name &quot;foo&quot; :type &quot;txt&quot; :defaults user-supplied-name)</PRE><P>you'll end up saving the file in <CODE>/home/foo.txt</CODE> rather than the
+intended <CODE>/home/peter/foo.txt</CODE> because the <CODE>&quot;peter&quot;</CODE> in the
+namestring will be placed in the name component when
+<CODE>user-supplied-name</CODE> is converted to a pathname. In the pathname
+portability library I'll discuss in the next chapter, you'll write a
+function called <CODE>pathname-as-directory</CODE> that converts a pathname
+to directory form. With that function you can reliably save the file
+in the directory indicated by the user. </P><PRE>(make-pathname
+  :name &quot;foo&quot; :type &quot;txt&quot; :defaults (pathname-as-directory user-supplied-name))</PRE><A NAME="interacting-with-the-file-system"><H2>Interacting with the File System</H2></A><P>While the most common interaction with the file system is probably
+<CODE><B>OPEN</B></CODE>ing files for reading and writing, you'll also occasionally
+want to test whether a file exists, list the contents of a directory,
+delete and rename files, create directories, and get information
+about a file such as who owns it, when it was last modified, and its
+length. This is where the generality of the pathname abstraction
+begins to cause a bit of pain: because the language standard doesn't
+specify how functions that interact with the file system map to any
+specific file system, implementers are left with a fair bit of
+leeway.</P><P>That said, most of the functions that interact with the file system
+are still pretty straightforward. I'll discuss the standard functions
+here and point out the ones that suffer from nonportability between
+implementations. In the next chapter you'll develop a pathname
+portability library to smooth over some of those nonportability
+issues.</P><P>To test whether a file exists in the file system corresponding to a
+pathname designator--a pathname, namestring, or file stream--you can
+use the function <CODE><B>PROBE-FILE</B></CODE>. If the file named by the pathname
+designator exists, <CODE><B>PROBE-FILE</B></CODE> returns the file's <I>truename</I>, a
+pathname with any file system-level translations such as resolving
+symbolic links performed. Otherwise, it returns <CODE><B>NIL</B></CODE>. However,
+not all implementations support using this function to test whether a
+directory exists. Also, Common Lisp doesn't provide a portable way to
+test whether a given file that exists is a regular file or a
+directory. In the next chapter you'll wrap <CODE><B>PROBE-FILE</B></CODE> with a new
+function, <CODE>file-exists-p</CODE>, that can both test whether a
+directory exists and tell you whether a given name is the name of a
+file or directory.</P><P>Similarly, the standard function for listing files in the file
+system, <CODE><B>DIRECTORY</B></CODE>, works fine for simple cases, but the
+differences between implementations make it tricky to use portably.
+In the next chapter you'll define a <CODE>list-directory</CODE> function
+that smoothes over some of these differences.</P><P><CODE><B>DELETE-FILE</B></CODE> and <CODE><B>RENAME-FILE</B></CODE> do what their names suggest.
+<CODE><B>DELETE-FILE</B></CODE> takes a pathname designator and deletes the named
+file, returning true if it succeeds. Otherwise it signals a
+<CODE><B>FILE-ERROR</B></CODE>.<SUP>11</SUP></P><P><CODE><B>RENAME-FILE</B></CODE> takes two pathname designators and renames the file
+named by the first name to the second name. </P><P>You can create directories with the function
+<CODE><B>ENSURE-DIRECTORIES-EXIST</B></CODE>. It takes a pathname designator and
+ensures that all the elements of the directory component exist and
+are directories, creating them as necessary. It returns the pathname
+it was passed, which makes it convenient to use inline.</P><PRE>(with-open-file (out (ensure-directories-exist name) :direction :output)
+   ...
+   )</PRE><P>Note that if you pass <CODE><B>ENSURE-DIRECTORIES-EXIST</B></CODE> a directory name,
+it should be in directory form, or the leaf directory won't be
+created.</P><P>The functions <CODE><B>FILE-WRITE-DATE</B></CODE> and <CODE><B>FILE-AUTHOR</B></CODE> both take a
+pathname designator. <CODE><B>FILE-WRITE-DATE</B></CODE> returns the time in number
+of seconds since midnight January 1, 1900, Greenwich mean time (GMT),
+that the file was last written, and <CODE><B>FILE-AUTHOR</B></CODE> returns, on Unix
+and Windows, the file owner.<SUP>12</SUP></P><P>To find the length of a file, you can use the function
+<CODE><B>FILE-LENGTH</B></CODE>. For historical reasons <CODE><B>FILE-LENGTH</B></CODE> takes a
+stream as an argument rather than a pathname. In theory this allows
+<CODE><B>FILE-LENGTH</B></CODE> to return the length in terms of the element type of
+the stream. However, since on most present-day operating systems, the
+only information available about the length of a file, short of
+actually reading the whole file to measure it, is its length in
+bytes, that's what most implementations return, even when
+<CODE><B>FILE-LENGTH</B></CODE> is passed a character stream. However, the standard
+doesn't require this behavior, so for predictable results, the best
+way to get the length of a file is to use a binary stream.<SUP>13</SUP> </P><PRE>(with-open-file (in filename :element-type '(unsigned-byte 8))
+  (file-length in))</PRE><P>A related function that also takes an open file stream as its
+argument is <CODE><B>FILE-POSITION</B></CODE>. When called with just a stream, this
+function returns the current position in the file--the number of
+elements that have been read from or written to the stream. When
+called with two arguments, the stream and a position designator, it
+sets the position of the stream to the designated position. The
+position designator must be the keyword <CODE>:start</CODE>, the keyword
+<CODE>:end</CODE>, or a non-negative integer. The two keywords set the
+position of the stream to the start or end of the file while an
+integer moves to the indicated position in the file. With a binary
+stream the position is simply a byte offset into the file. However,
+for character streams things are a bit more complicated because of
+character-encoding issues. Your best bet, if you need to jump around
+within a file of textual data, is to only ever pass, as a second
+argument to the two-argument version of <CODE><B>FILE-POSITION</B></CODE>, a value
+previously returned by the one-argument version of <CODE><B>FILE-POSITION</B></CODE>
+with the same stream argument. </P><A NAME="other-kinds-of-io"><H2>Other Kinds of I/O</H2></A><P>In addition to file streams, Common Lisp supports other kinds of
+streams, which can also be used with the various reading, writing,
+and printing I/O functions. For instance, you can read data from, or
+write data to, a string using <CODE><B>STRING-STREAM</B></CODE>s, which you can
+create with the functions <CODE><B>MAKE-STRING-INPUT-STREAM</B></CODE> and
+<CODE><B>MAKE-STRING-OUTPUT-STREAM</B></CODE>.</P><P><CODE><B>MAKE-STRING-INPUT-STREAM</B></CODE> takes a string and optional start and
+end indices to bound the area of the string from which data should be
+read and returns a character stream that you can pass to any of the
+character-based input functions such as <CODE><B>READ-CHAR</B></CODE>,
+<CODE><B>READ-LINE</B></CODE>, or <CODE><B>READ</B></CODE>. For example, if you have a string
+containing a floating-point literal in Common Lisp's syntax, you can
+convert it to a float like this:</P><PRE>(let ((s (make-string-input-stream &quot;1.23&quot;)))
+  (unwind-protect (read s)
+    (close s)))</PRE><P>Similarly, <CODE><B>MAKE-STRING-OUTPUT-STREAM</B></CODE> creates a stream you can
+use with <CODE><B>FORMAT</B></CODE>, <CODE><B>PRINT</B></CODE>, <CODE><B>WRITE-CHAR</B></CODE>, <CODE><B>WRITE-LINE</B></CODE>,
+and so on. It takes no arguments. Whatever you write, a string output
+stream will be accumulated into a string that can then be obtained
+with the function <CODE><B>GET-OUTPUT-STREAM-STRING</B></CODE>. Each time you call
+<CODE><B>GET-OUTPUT-STREAM-STRING</B></CODE>, the stream's internal string is
+cleared so you can reuse an existing string output stream.</P><P>However, you'll rarely use these functions directly, because the
+macros <CODE><B>WITH-INPUT-FROM-STRING</B></CODE> and <CODE><B>WITH-OUTPUT-TO-STRING</B></CODE>
+provide a more convenient interface. <CODE><B>WITH-INPUT-FROM-STRING</B></CODE> is
+similar to <CODE><B>WITH-OPEN-FILE</B></CODE>--it creates a string input stream from
+a given string and then executes the forms in its body with the
+stream bound to the variable you provide. For instance, instead of
+the <CODE><B>LET</B></CODE> form with the explicit <CODE><B>UNWIND-PROTECT</B></CODE>, you'd
+probably write this:</P><PRE>(with-input-from-string (s &quot;1.23&quot;)
+  (read s))</PRE><P>The <CODE><B>WITH-OUTPUT-TO-STRING</B></CODE> macro is similar: it binds a newly
+created string output stream to a variable you name and then executes
+its body. After all the body forms have been executed,
+<CODE><B>WITH-OUTPUT-TO-STRING</B></CODE> returns the value that would be returned
+by <CODE><B>GET-OUTPUT-STREAM-STRING</B></CODE>.</P><PRE>CL-USER&gt; (with-output-to-string (out)
+            (format out &quot;hello, world &quot;)
+            (format out &quot;~s&quot; (list 1 2 3)))
+&quot;hello, world (1 2 3)&quot;</PRE><P>The other kinds of streams defined in the language standard provide
+various kinds of stream &quot;plumbing,&quot; allowing you to plug together
+streams in almost any configuration. A <CODE><B>BROADCAST-STREAM</B></CODE> is an
+output stream that sends any data written to it to a set of output
+streams provided as arguments to its constructor function,
+<CODE><B>MAKE-BROADCAST-STREAM</B></CODE>.<SUP>14</SUP> Conversely, a
+<CODE><B>CONCATENATED-STREAM</B></CODE> is an input stream that takes its input from
+a set of input streams, moving from stream to stream as it hits the
+end of each stream. <CODE><B>CONCATENATED-STREAM</B></CODE>s are constructed with
+the function <CODE><B>MAKE-CONCATENATED-STREAM</B></CODE>, which takes any number of
+input streams as arguments.</P><P>Two kinds of bidirectional streams that can plug together streams in
+a couple ways are <CODE><B>TWO-WAY-STREAM</B></CODE> and <CODE><B>ECHO-STREAM</B></CODE>. Their
+constructor functions, <CODE><B>MAKE-TWO-WAY-STREAM</B></CODE> and
+<CODE><B>MAKE-ECHO-STREAM</B></CODE>, both take two arguments, an input stream and
+an output stream, and return a stream of the appropriate type, which
+you can use with both input and output functions.</P><P>In a <CODE><B>TWO-WAY-STREAM</B></CODE> every read you perform will return data read
+from the underlying input stream, and every write will send data to
+the underlying output stream. An <CODE><B>ECHO-STREAM</B></CODE> works essentially
+the same way except that all the data read from the underlying input
+stream is also echoed to the output stream. Thus, the output stream
+of an <CODE><B>ECHO-STREAM</B></CODE> stream will contain a transcript of both sides
+of the conversation.</P><P>Using these five kinds of streams, you can build almost any topology
+of stream plumbing you want.</P><P>Finally, although the Common Lisp standard doesn't say anything about
+networking APIs, most implementations support socket programming and
+typically implement sockets as another kind of stream, so you can use
+all the regular I/O functions with them.<SUP>15</SUP></P><P>Now you're ready to move on to building a library that smoothes over
+some of the differences between how the basic pathname functions
+behave in different Common Lisp implementations.
+</P><HR/><DIV CLASS="notes"><P><SUP>1</SUP>Note, however,
+that while the Lisp reader knows how to skip comments, it completely
+skips them. Thus, if you use <CODE><B>READ</B></CODE> to read in a configuration
+file containing comments and then use <CODE><B>PRINT</B></CODE> to save changes to
+the data, you'll lose the comments.</P><P><SUP>2</SUP>By default <CODE><B>OPEN</B></CODE> uses the default
+character encoding for the operating system, but it also accepts a
+keyword parameter, <CODE>:external-format</CODE>, that can pass
+implementation-defined values that specify a different encoding.
+Character streams also translate the platform-specific end-of-line
+sequence to the single character <CODE>#\Newline</CODE>.</P><P><SUP>3</SUP>The type <CODE>(unsigned-byte 8)</CODE>
+indicates an 8-bit byte; Common Lisp &quot;byte&quot; types aren't a fixed size
+since Lisp has run at various times on architectures with byte sizes
+from 6 to 9 bits, to say nothing of the PDP-10, which had
+individually addressable variable-length bit fields of 1 to 36 bits.</P><P><SUP>4</SUP>In general, a
+stream is either a character stream or a binary stream, so you can't
+mix calls to <CODE><B>READ-BYTE</B></CODE> and <CODE><B>READ-CHAR</B></CODE> or other
+character-based read functions. However, some implementations, such
+as Allegro, support so-called bivalent streams, which support both
+character and binary I/O.</P><P><SUP>5</SUP>Some folks expect this wouldn't be a problem in a
+garbage-collected language such as Lisp. It is the case in most Lisp
+implementations that a stream that becomes garbage will automatically
+be closed. However, this isn't something to rely on--the problem is
+that garbage collectors usually run only when memory is low; they
+don't know about other scarce resources such as file handles. If
+there's plenty of memory available, it's easy to run out of file
+handles long before the garbage collector runs.</P><P><SUP>6</SUP>Another
+reason the pathname system is considered somewhat baroque is because
+of the inclusion of <I>logical pathnames</I>. However, you can use the
+rest of the pathname system perfectly well without knowing anything
+more about logical pathnames than that you can safely ignore them.
+Briefly, logical pathnames allow Common Lisp programs to contain
+references to pathnames without naming specific files. Logical
+pathnames could then be mapped to specific locations in an actual
+file system when the program was installed by defining a &quot;logical
+pathname translation&quot; that translates logical pathnames matching
+certain wildcards to pathnames representing files in the file system,
+so-called physical pathnames. They have their uses in certain
+situations, but you can get pretty far without worrying about them.</P><P><SUP>7</SUP>Many Unix-based implementations
+treat filenames whose last element starts with a dot and don't
+contain any other dots specially, putting the whole element, with the
+dot, in the name component and leaving the type component <CODE><B>NIL</B></CODE>.</P><PRE>(pathname-name (pathname &quot;/foo/.emacs&quot;)) ==&gt; &quot;.emacs&quot;
+(pathname-type (pathname &quot;/foo/.emacs&quot;)) ==&gt; NIL</PRE><P>However, not all implementations follow this convention; some will
+create a pathname with &quot;&quot; as the name and <CODE>emacs</CODE> as the type.</P><P><SUP>8</SUP>The
+name returned by <CODE><B>FILE-NAMESTRING</B></CODE> also includes the version
+component on file systems that use it.</P><P><SUP>9</SUP>The host component may not default to <CODE><B>NIL</B></CODE>,
+but if not, it will be an opaque implementation-defined value.</P><P><SUP>10</SUP>For absolutely maximum portability, you should really write
+this:</P><PRE>(make-pathname :type &quot;html&quot; :version :newest :defaults input-file)</PRE><P>Without the <CODE>:version</CODE> argument, on a file system with built-in
+versioning, the output pathname would inherit its version number from
+the input file which isn't likely to be right--if the input file has
+been saved many times it will have a much higher version number than
+the generated HTML file. On implementations without file versioning,
+the <CODE>:version</CODE> argument should be ignored. It's up to you if you
+care that much about portability.</P><P><SUP>11</SUP>See Chapter 19 for more on handling errors.</P><P><SUP>12</SUP>For applications that need access
+to other file attributes on a particular operating system or file
+system, libraries provide bindings to underlying C system calls. The
+Osicat library at <CODE>http://common-lisp.net/project/osicat/</CODE>
+provides a simple API built using the Universal Foreign Function
+Interface (UFFI), which should run on most Common Lisps that run on a
+POSIX operating system.</P><P><SUP>13</SUP>The
+number of bytes and characters in a file can differ even if you're
+not using a multibyte character encoding. Because character streams
+also translate platform-specific line endings to a single
+<CODE>#\Newline</CODE> character, on Windows (which uses CRLF as its line
+ending) the number of characters will typically be smaller than the
+number of bytes. If you really have to know the number of characters
+in a file, you have to bite the bullet and write something like
+this:</P><PRE>(with-open-file (in filename)
+  (loop while (read-char in nil) count t))</PRE><P>or maybe something more efficient like this:</P><PRE>(with-open-file (in filename)
+  (let ((scratch (make-string 4096)))
+    (loop for read = (read-sequence scratch in)
+          while (plusp read) sum read)))</PRE><P><SUP>14</SUP><CODE><B>MAKE-BROADCAST-STREAM</B></CODE> can make
+a data black hole by calling it with no arguments.</P><P><SUP>15</SUP>The biggest missing
+piece in Common Lisp's standard I/O facilities is a way for users to
+define new stream classes. There are, however, two de facto standards
+for user-defined streams. During the Common Lisp standardization,
+David Gray of Texas Instruments wrote a draft proposal for an API to
+allow users to define new stream classes. Unfortunately, there wasn't
+time to work out all the issues raised by his draft to include it in
+the language standard. However, many implementations support some form
+of so-called Gray Streams, basing their API on Gray's draft proposal.
+Another, newer API, called Simple Streams, has been developed by Franz
+and included in Allegro Common Lisp. It was designed to improve the
+performance of user-defined streams relative to Gray Streams and has
+been adopted by some of the open-source Common Lisp implementations.</P></DIV></BODY></HTML>

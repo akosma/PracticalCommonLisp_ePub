@@ -1,0 +1,364 @@
+<HTML><HEAD><TITLE>Practical: A Portable Pathname Library</TITLE><LINK REL="stylesheet" TYPE="text/css" HREF="style.css"/></HEAD><BODY><DIV CLASS="copyright">Copyright &copy; 2003-2005, Peter Seibel</DIV><H1>15. Practical: A Portable Pathname Library</H1><P>As I discussed in the previous chapter, Common Lisp provides an
+abstraction, the pathname, that's supposed to insulate you from the
+details of how different operating systems and file systems name
+files. Pathnames provide a useful API for manipulating names as names,
+but when it comes to the functions that actually interact with the
+file system, things get a bit hairy.</P><P>The root of the problem, as I mentioned, is that the pathname
+abstraction was designed to represent filenames on a much wider
+variety of file systems than are commonly used now. Unfortunately, by
+making pathnames abstract enough to account for a wide variety of
+file systems, Common Lisp's designers left implementers with a fair
+number of choices to make about how exactly to map the pathname
+abstraction onto any particular file system. Consequently, different
+implementers, each implementing the pathname abstraction for the same
+file system, just by making different choices at a few key junctions,
+could end up with conforming implementations that nonetheless provide
+different behavior for several of the main pathname-related
+functions.</P><P>However, one way or another, all implementations provide the same
+basic functionality, so it's not too hard to write a library that
+provides a consistent interface for the most common operations across
+different implementations. That's your task for this chapter. In
+addition to giving you several useful functions that you'll use in
+future chapters, writing this library will give you a chance to learn
+how to write code that deals with differences between
+implementations. </P><A NAME="the-api"><H2>The API</H2></A><P>The basic operations the library will support will be getting a list
+of files in a directory and determining whether a file or directory
+with a given name exists. You'll also write a function for
+recursively walking a directory hierarchy, calling a given function
+for each pathname in the tree.</P><P>In theory, these directory listing and file existence operations are
+already provided by the standard functions <CODE><B>DIRECTORY</B></CODE> and
+<CODE><B>PROBE-FILE</B></CODE>. However, as you'll see, there are enough different
+ways to implement these functions--all within the bounds of valid
+interpretations of the language standard--that you'll want to write
+new functions that provide a consistent behavior across
+implementations. </P><A NAME="features-and-read-time-conditionalization"><H2>*FEATURES* and Read-Time Conditionalization</H2></A><P>Before you can implement this API in a library that will run
+correctly on multiple Common Lisp implementations, I need to show you
+the mechanism for writing implementation-specific code.</P><P>While most of the code you write can be &quot;portable&quot; in the sense that
+it will run the same on any conforming Common Lisp implementation,
+you may occasionally need to rely on implementation-specific
+functionality or to write slightly different bits of code for
+different implementations. To allow you to do so without totally
+destroying the portability of your code, Common Lisp provides a
+mechanism, called <I>read-time conditionalization</I>, that allows you
+to conditionally include code based on various features such as what
+implementation it's being run in.</P><P>The mechanism consists of a variable <CODE><B>*FEATURES*</B></CODE> and two extra
+bits of syntax understood by the Lisp reader. <CODE><B>*FEATURES*</B></CODE> is a
+list of symbols; each symbol represents a &quot;feature&quot; that's present in
+the implementation or on the underlying platform. These symbols are
+then used in <I>feature expressions</I> that evaluate to true or false
+depending on whether the symbols in the expression are present in
+<CODE><B>*FEATURES*</B></CODE>. The simplest feature expression is a single symbol;
+the expression is true if the symbol is in <CODE><B>*FEATURES*</B></CODE> and false
+if it isn't. Other feature expressions are boolean expressions built
+out of <CODE><B>NOT</B></CODE>, <CODE><B>AND</B></CODE>, and <CODE><B>OR</B></CODE> operators. For instance, if
+you wanted to conditionalize some code to be included only if the
+features <CODE>foo</CODE> and <CODE>bar</CODE> were present, you could write the
+feature expression <CODE>(and foo bar)</CODE>.</P><P>The reader uses feature expressions in conjunction with two bits of
+syntax, <CODE>#+</CODE> and <CODE>#-</CODE>. When the reader sees either of these
+bits of syntax, it first reads a feature expression and then
+evaluates it as I just described. When a feature expression following
+a <CODE>#+</CODE> is true, the reader reads the next expression normally.
+Otherwise it skips the next expression, treating it as whitespace.
+<CODE>#-</CODE> works the same way except it reads the form if the feature
+expression is false and skips it if it's true. </P><P>The initial value of <CODE><B>*FEATURES*</B></CODE> is implementation dependent, and
+what functionality is implied by the presence of any given symbol is
+likewise defined by the implementation. However, all implementations
+include at least one symbol that indicates what implementation it is.
+For instance, Allegro Common Lisp includes the symbol
+<CODE>:allegro</CODE>, CLISP includes <CODE>:clisp</CODE>, SBCL includes
+<CODE>:sbcl</CODE>, and CMUCL includes <CODE>:cmu</CODE>. To avoid dependencies
+on packages that may or may not exist in different implementations,
+the symbols in <CODE><B>*FEATURES*</B></CODE> are usually keywords, and the reader
+binds <CODE><B>*PACKAGE*</B></CODE> to the <CODE><B>KEYWORD</B></CODE> package while reading
+feature expressions. Thus, a name with no package qualification will
+be read as a keyword symbol. So, you could write a function that
+behaves slightly differently in each of the implementations just
+mentioned like this:</P><PRE>(defun foo ()
+  #+allegro (do-one-thing)
+  #+sbcl (do-another-thing)
+  #+clisp (something-else)
+  #+cmu (yet-another-version)
+  #-(or allegro sbcl clisp cmu) (error &quot;Not implemented&quot;))</PRE><P>In Allegro that code will be read as if it had been written like
+this:</P><PRE>(defun foo ()
+  (do-one-thing))</PRE><P>while in SBCL the reader will read this:</P><PRE>(defun foo ()
+  (do-another-thing))</PRE><P>while in an implementation other than one of the ones specifically
+conditionalized, it will read this:</P><PRE>(defun foo ()
+  (error &quot;Not implemented&quot;))</PRE><P>Because the conditionalization happens in the reader, the compiler
+doesn't even see expressions that are skipped.<SUP>1</SUP> This means you pay no runtime cost for having different
+versions for different implementations. Also, when the reader skips
+conditionalized expressions, it doesn't bother interning symbols, so
+the skipped expressions can safely contain symbols from packages that
+may not exist in other implementations. </P><DIV CLASS="sidebarhead">Packaging the Library</DIV><DIV CLASS="sidebar"><P>Speaking of packages, if you download the complete code for
+this library, you'll see that it's defined in a new package,
+<CODE>com.gigamonkeys.pathnames</CODE>. I'll discuss the details of
+defining and using packages in Chapter 21. For now you should note
+that some implementations provide their own packages that contain
+functions with some of the same names as the ones you'll define in
+this chapter and make those names available in the CL-USER package.
+Thus, if you try to define the functions from this library while in
+the CL-USER package, you may get errors or warnings about clobbering
+existing definitions. To avoid this possibility, you can create a
+file called <CODE>packages.lisp</CODE> with the following contents:</P><PRE>(in-package :cl-user)</PRE><PRE>(defpackage :com.gigamonkeys.pathnames
+  (:use :common-lisp)
+  (:export
+   :list-directory
+   :file-exists-p
+   :directory-pathname-p
+   :file-pathname-p
+   :pathname-as-directory
+   :pathname-as-file
+   :walk-directory
+   :directory-p
+   :file-p))</PRE><P>and <CODE><B>LOAD</B></CODE> it. Then at the REPL or at the top of the file where
+you type the definitions from this chapter, type the following
+expression:</P><PRE>(in-package :com.gigamonkeys.pathnames)</PRE><P>In addition to avoiding name conflicts with symbols already available
+in <CODE>CL-USER</CODE>, packaging the library this way also makes it
+easier to use in other code, as you'll see in several future
+chapters.</P></DIV><A NAME="listing-a-directory"><H2>Listing a Directory</H2></A><P>You can implement the function for listing a single directory,
+<CODE>list-directory</CODE>, as a thin wrapper around the standard function
+<CODE><B>DIRECTORY</B></CODE>. <CODE><B>DIRECTORY</B></CODE> takes a special kind of pathname,
+called a <I>wild pathname</I>, that has one or more components
+containing the special value <CODE>:wild</CODE> and returns a list of
+pathnames representing files in the file system that match the wild
+pathname.<SUP>2</SUP> The matching algorithm--like most
+things having to do with the interaction between Lisp and a
+particular file system--isn't defined by the language standard, but
+most implementations on Unix and Windows follow the same basic
+scheme.</P><P>The <CODE><B>DIRECTORY</B></CODE> function has two problems that you need to address
+with <CODE>list-directory</CODE>. The main one is that certain aspects of
+its behavior differ fairly significantly between different Common
+Lisp implementations, even on the same operating system. The other is
+that while <CODE><B>DIRECTORY</B></CODE> provides a powerful interface for listing
+files, to use it properly requires understanding some rather subtle
+points about the pathname abstraction. Between these subtleties and
+the idiosyncrasies of different implementations, actually writing
+portable code that uses <CODE><B>DIRECTORY</B></CODE> to do something as simple as
+listing all the files and subdirectories in a single directory can be
+a frustrating experience. You can deal with those subtleties and
+idiosyncrasies once and for all, by writing <CODE>list-directory</CODE>,
+and forget them thereafter.</P><P>One subtlety I discussed in Chapter 14 is the two ways to represent
+the name of a directory as a pathname: directory form and file form.</P><P>To get <CODE><B>DIRECTORY</B></CODE> to return a list of files in
+<CODE>/home/peter/</CODE>, you need to pass it a wild pathname whose
+directory component is the directory you want to list and whose name
+and type components are <CODE>:wild</CODE>. Thus, to get a listing of the
+files in <CODE>/home/peter/</CODE>, it might seem you could write this: </P><PRE>(directory (make-pathname :name :wild :type :wild :defaults home-dir))</PRE><P>where <CODE>home-dir</CODE> is a pathname representing <CODE>/home/peter/</CODE>.
+This would work if <CODE>home-dir</CODE> were in directory form. But if it
+were in file form--for example, if it had been created by parsing the
+namestring <CODE>&quot;/home/peter&quot;</CODE>--then that same expression would list
+all the files in <CODE>/home</CODE> since the name component <CODE>&quot;peter&quot;</CODE>
+would be replaced with <CODE>:wild</CODE>.</P><P>To avoid having to worry about explicitly converting between
+representations, you can define <CODE>list-directory</CODE> to accept a
+nonwild pathname in either form, which it will then convert to the
+appropriate wild pathname.</P><P>To help with this, you should define a few helper functions. One,
+<CODE>component-present-p</CODE>, will test whether a given component of a
+pathname is &quot;present,&quot; meaning neither <CODE><B>NIL</B></CODE> nor the special value
+<CODE>:unspecific</CODE>.<SUP>3</SUP> Another, <CODE>directory-pathname-p</CODE>,
+tests whether a pathname is already in directory form, and the third,
+<CODE>pathname-as-directory</CODE>, converts any pathname to a directory
+form pathname. </P><PRE>(defun component-present-p (value)
+  (and value (not (eql value :unspecific))))
+
+(defun directory-pathname-p  (p)
+  (and
+   (not (component-present-p (pathname-name p)))
+   (not (component-present-p (pathname-type p)))
+   p))
+
+(defun pathname-as-directory (name)
+  (let ((pathname (pathname name)))
+    (when (wild-pathname-p pathname)
+      (error &quot;Can't reliably convert wild pathnames.&quot;))
+    (if (not (directory-pathname-p name))
+      (make-pathname
+       :directory (append (or (pathname-directory pathname) (list :relative))
+                          (list (file-namestring pathname)))
+       :name      nil
+       :type      nil
+       :defaults pathname)
+      pathname)))</PRE><P>Now it seems you could generate a wild pathname to pass to
+<CODE><B>DIRECTORY</B></CODE> by calling <CODE><B>MAKE-PATHNAME</B></CODE> with a directory form
+name returned by <CODE>pathname-as-directory</CODE>. Unfortunately, it's
+not quite that simple, thanks to a quirk in CLISP's implementation of
+<CODE><B>DIRECTORY</B></CODE>. In CLISP, <CODE><B>DIRECTORY</B></CODE> won't return files with no
+extension unless the type component of the wildcard is <CODE><B>NIL</B></CODE>
+rather than <CODE>:wild</CODE>. So you can define a function,
+<CODE>directory-wildcard</CODE>, that takes a pathname in either directory
+or file form and returns a proper wildcard for the given
+implementation using read-time conditionalization to make a pathname
+with a <CODE>:wild</CODE> type component in all implementations except for
+CLISP and <CODE><B>NIL</B></CODE> in CLISP. </P><PRE>(defun directory-wildcard (dirname)
+  (make-pathname
+   :name :wild
+   :type #-clisp :wild #+clisp nil
+   :defaults (pathname-as-directory dirname)))</PRE><P>Note how each read-time conditional operates at the level of a single
+expression After <CODE>#-clisp</CODE>, the expression <CODE>:wild</CODE> is
+either read or skipped; likewise, after <CODE>#+clisp</CODE>, the <CODE><B>NIL</B></CODE>
+is read or skipped.</P><P>Now you can take a first crack at the <CODE>list-directory</CODE> function.</P><PRE>(defun list-directory (dirname)
+  (when (wild-pathname-p dirname)
+    (error &quot;Can only list concrete directory names.&quot;))
+  (directory (directory-wildcard dirname)))</PRE><P>As it stands, this function would work in SBCL, CMUCL, and LispWorks.
+Unfortunately, a couple more implementation differences remain to be
+smoothed over. One is that not all implementations will return
+subdirectories of the given directory. Allegro, SBCL, CMUCL, and
+LispWorks do. OpenMCL doesn't by default but will if you pass
+<CODE><B>DIRECTORY</B></CODE> a true value via the implementation-specific keyword
+argument <CODE>:directories</CODE>. CLISP's <CODE><B>DIRECTORY</B></CODE> returns
+subdirectories only when it's passed a wildcard pathname with
+<CODE>:wild</CODE> as the last element of the directory component and
+<CODE><B>NIL</B></CODE> name and type components. In this case, it returns <I>only</I>
+subdirectories, so you'll need to call <CODE><B>DIRECTORY</B></CODE> twice with
+different wildcards and combine the results.</P><P>Once you get all the implementations returning directories, you'll
+discover they can also differ in whether they return the names of
+directories in directory or file form. You want <CODE>list-directory</CODE>
+to always return directory names in directory form so you can
+differentiate subdirectories from regular files based on just the
+name. Except for Allegro, all the implementations this library will
+support do that. Allegro, on the other hand, requires you to pass
+<CODE><B>DIRECTORY</B></CODE> the implementation-specific keyword argument
+<CODE>:directories-are-files</CODE> <CODE><B>NIL</B></CODE> to get it to return
+directories in file form.</P><P>Once you know how to make each implementation do what you want,
+actually writing <CODE>list-directory</CODE> is simply a matter of
+combining the different versions using read-time conditionals. </P><PRE>(defun list-directory (dirname)
+  (when (wild-pathname-p dirname)
+    (error &quot;Can only list concrete directory names.&quot;))
+  (let ((wildcard (directory-wildcard dirname)))
+
+    #+(or sbcl cmu lispworks)
+    (directory wildcard)
+
+    #+openmcl
+    (directory wildcard :directories t)
+
+    #+allegro
+    (directory wildcard :directories-are-files nil)
+
+    #+clisp
+    (nconc
+     (directory wildcard)
+     (directory (clisp-subdirectories-wildcard wildcard)))
+
+    #-(or sbcl cmu lispworks openmcl allegro clisp)
+    (error &quot;list-directory not implemented&quot;)))</PRE><P>The function <CODE>clisp-subdirectories-wildcard</CODE> isn't actually
+specific to CLISP, but since it isn't needed by any other
+implementation, you can guard its definition with a read-time
+conditional. In this case, since the expression following the
+<CODE>#+</CODE> is the whole <CODE><B>DEFUN</B></CODE>, the whole function definition will
+be included or not, depending on whether <CODE>clisp</CODE> is present in
+<CODE><B>*FEATURES*</B></CODE>.</P><PRE>#+clisp
+(defun clisp-subdirectories-wildcard (wildcard)
+  (make-pathname
+   :directory (append (pathname-directory wildcard) (list :wild))
+   :name nil
+   :type nil
+   :defaults wildcard))</PRE><A NAME="testing-a-files-existence"><H2>Testing a File's Existence</H2></A><P>To replace <CODE><B>PROBE-FILE</B></CODE>, you can define a function called
+<CODE>file-exists-p</CODE>. It should accept a pathname and return an
+equivalent pathname if the file exists and <CODE><B>NIL</B></CODE> if it doesn't. It
+should be able to accept the name of a directory in either directory
+or file form but should always return a directory form pathname if
+the file exists and is a directory. This will allow you to use
+<CODE>file-exists-p</CODE>, along with <CODE>directory-pathname-p</CODE>, to test
+whether an arbitrary name is the name of a file or directory.</P><P>In theory, <CODE>file-exists-p</CODE> is quite similar to the standard
+function <CODE><B>PROBE-FILE</B></CODE>; indeed, in several implementations--SBCL,
+LispWorks, and OpenMCL--<CODE><B>PROBE-FILE</B></CODE> already gives you the
+behavior you want for <CODE>file-exists-p</CODE>. But not all
+implementations of <CODE><B>PROBE-FILE</B></CODE> behave quite the same.</P><P>Allegro and CMUCL's <CODE><B>PROBE-FILE</B></CODE> functions are close to what you
+need--they will accept the name of a directory in either form but,
+instead of returning a directory form name, simply return the name in
+the same form as the argument it was passed. Luckily, if passed the
+name of a nondirectory in directory form, they return <CODE><B>NIL</B></CODE>. So
+with those implementations you can get the behavior you want by first
+passing the name to <CODE><B>PROBE-FILE</B></CODE> in directory form--if the file
+exists and is a directory, it will return the directory form name. If
+that call returns <CODE><B>NIL</B></CODE>, then you try again with a file form name.</P><P>CLISP, on the other hand, once again has its own way of doing things.
+Its <CODE><B>PROBE-FILE</B></CODE> immediately signals an error if passed a name in
+directory form, regardless of whether a file or directory exists with
+that name. It also signals an error if passed a name in file form
+that's actually the name of a directory. For testing whether a
+directory exists, CLISP provides its own function:
+<CODE>probe-directory</CODE> (in the <CODE>ext</CODE> package). This is almost
+the mirror image of <CODE><B>PROBE-FILE</B></CODE>: it signals an error if passed a
+name in file form or if passed a name in directory form that happens
+to name a file. The only difference is it returns <CODE><B>T</B></CODE> rather than
+a pathname when the named directory exists.</P><P>But even in CLISP you can implement the desired semantics by wrapping
+the calls to <CODE><B>PROBE-FILE</B></CODE> and <CODE>probe-directory</CODE> in
+<CODE><B>IGNORE-ERRORS</B></CODE>.<SUP>4</SUP></P><PRE>(defun file-exists-p (pathname)
+  #+(or sbcl lispworks openmcl)
+  (probe-file pathname)
+
+  #+(or allegro cmu)
+  (or (probe-file (pathname-as-directory pathname))
+      (probe-file pathname))
+
+  #+clisp
+  (or (ignore-errors
+        (probe-file (pathname-as-file pathname)))
+      (ignore-errors
+        (let ((directory-form (pathname-as-directory pathname)))
+          (when (ext:probe-directory directory-form)
+            directory-form))))
+
+  #-(or sbcl cmu lispworks openmcl allegro clisp)
+  (error &quot;file-exists-p not implemented&quot;))</PRE><P>The function <CODE>pathname-as-file</CODE> that you need for the CLISP
+implementation of <CODE>file-exists-p</CODE> is the inverse of the
+previously defined <CODE>pathname-as-directory</CODE>, returning a pathname
+that's the file form equivalent of its argument. This function,
+despite being needed here only by CLISP, is generally useful, so
+define it for all implementations and make it part of the library.</P><PRE>(defun pathname-as-file (name)
+  (let ((pathname (pathname name)))
+    (when (wild-pathname-p pathname)
+      (error &quot;Can't reliably convert wild pathnames.&quot;))
+    (if (directory-pathname-p name)
+      (let* ((directory (pathname-directory pathname))
+             (name-and-type (pathname (first (last directory)))))
+        (make-pathname
+         :directory (butlast directory)
+         :name (pathname-name name-and-type)
+         :type (pathname-type name-and-type)
+         :defaults pathname))
+      pathname)))</PRE><A NAME="walking-a-directory-tree"><H2>Walking a Directory Tree</H2></A><P>Finally, to round out this library, you can implement a function
+called <CODE>walk-directory</CODE>. Unlike the functions defined
+previously, this function doesn't need to do much of anything to
+smooth over implementation differences; it just needs to use the
+functions you've already defined. However, it's quite handy, and
+you'll use it several times in subsequent chapters. It will take the
+name of a directory and a function and call the function on the
+pathnames of all the files under the directory, recursively. It will
+also take two keyword arguments: <CODE>:directories</CODE> and
+<CODE>:test</CODE>. When <CODE>:directories</CODE> is true, it will call the
+function on the pathnames of directories as well as regular files.
+The <CODE>:test</CODE> argument, if provided, specifies another function
+that's invoked on each pathname before the main function is; the main
+function will be called only if the test function returns true.</P><PRE>(defun walk-directory (dirname fn &amp;key directories (test (constantly t)))
+  (labels
+      ((walk (name)
+         (cond
+           ((directory-pathname-p name)
+            (when (and directories (funcall test name))
+              (funcall fn name))
+            (dolist (x (list-directory name)) (walk x)))
+           ((funcall test name) (funcall fn name)))))
+    (walk (pathname-as-directory dirname))))</PRE><P>Now you have a useful library of functions for dealing with
+pathnames. As I mentioned, these functions will come in handy in
+later chapters, particularly Chapters 23 and 27, where you'll use
+<CODE>walk-directory</CODE> to crawl through directory trees containing
+spam messages and MP3 files. But before we get to that, though, I
+need to talk about object orientation, the topic of the next two
+chapters. 
+</P><HR/><DIV CLASS="notes"><P><SUP>1</SUP>One slightly
+annoying consequence of the way read-time conditionalization works is
+that there's no easy way to write a fall-through case. For example,
+if you add support for another implementation to <CODE>foo</CODE> by adding
+another expression guarded with <CODE>#+</CODE>, you need to remember to
+also add the same feature to the <CODE>or</CODE> feature expression after
+the <CODE>#-</CODE> or the <CODE><B>ERROR</B></CODE> form will be evaluated after your new
+code runs.</P><P><SUP>2</SUP>Another special value, <CODE>:wild-inferiors</CODE>, can
+appear as part of the directory component of a wild pathname, but you
+won't need it in this chapter.</P><P><SUP>3</SUP>Implementations are allowed to return
+<CODE>:unspecific</CODE> instead of <CODE><B>NIL</B></CODE> as the value of pathname
+components in certain situations such as when the component isn't
+used by that implementation.</P><P><SUP>4</SUP>This is slightly broken in the sense that if
+<CODE><B>PROBE-FILE</B></CODE> signals an error for some other reason, this code
+will interpret it incorrectly. Unfortunately, the CLISP documentation
+doesn't specify what errors might be signaled by <CODE><B>PROBE-FILE</B></CODE> and
+<CODE>probe-directory</CODE>, and experimentation seems to show that they
+signal <CODE>simple-file-error</CODE>s in most erroneous situations.</P></DIV></BODY></HTML>

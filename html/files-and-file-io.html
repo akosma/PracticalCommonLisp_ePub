@@ -1,0 +1,518 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.01//EN">
+<html>
+    <head>
+        <title>
+            Files and File I/O
+        </title>
+        <link rel="stylesheet" type="text/css" href="style.css">
+    </head>
+    <body>
+        <h1>
+            14. Files and File I/O
+        </h1>
+        <p>
+            Common Lisp provides a rich library of functionality for dealing with files. In this chapter I'll focus on a few basic file-related tasks: reading and writing files and listing files in the file system. For these basic tasks, Common Lisp's I/O facilities are similar to those in other languages. Common Lisp provides a stream abstraction for reading and writing data and an abstraction, called <i>pathnames</i>, for manipulating filenames in an operating system-independent way. Additionally, Common Lisp provides other bits of functionality unique to Lisp such as the ability to read and write s-expressions.
+        </p>
+        <h2>
+            <a name="reading-file-data" id="reading-file-data">Reading File Data</a>
+        </h2>
+        <p>
+            The most basic file I/O task is to read the contents of a file. You obtain a stream from which you can read a file's contents with the <code><b>OPEN</b></code> function. By default <code><b>OPEN</b></code> returns a character-based input stream you can pass to a variety of functions that read one or more characters of text: <code><b>READ-CHAR</b></code> reads a single character; <code><b>READ-LINE</b></code> reads a line of text, returning it as a string with the end-of-line character(s) removed; and <code><b>READ</b></code> reads a single s-expression, returning a Lisp object. When you're done with the stream, you can close it with the <code><b>CLOSE</b></code> function.
+        </p>
+        <p>
+            The only required argument to <code><b>OPEN</b></code> is the name of the file to read. As you'll see in the section "Filenames," Common Lisp provides a couple of ways to represent a filename, but the simplest is to use a string containing the name in the local file-naming syntax. So assuming that <code>/some/file/name.txt</code> is a file, you can open it like this:
+        </p>
+        <pre>
+(open "/some/file/name.txt")
+</pre>
+        <p>
+            You can use the object returned as the first argument to any of the read functions. For instance, to print the first line of the file, you can combine <code><b>OPEN</b></code>, <code><b>READ-LINE</b></code>, and <code><b>CLOSE</b></code> as follows:
+        </p>
+        <pre>
+(let ((in (open "/some/file/name.txt")))
+  (format t "~a~%" (read-line in))
+  (close in))
+</pre>
+        <p>
+            Of course, a number of things can go wrong while trying to open and read from a file. The file may not exist. Or you may unexpectedly hit the end of the file while reading. By default <code><b>OPEN</b></code> and the <code>READ-*</code> functions will signal an error in these situations. In Chapter 19, I'll discuss how to recover from such errors. For now, however, there's a lighter-weight solution: each of these functions accepts arguments that modify its behavior in these exceptional situations.
+        </p>
+        <p>
+            If you want to open a possibly nonexistent file without <code><b>OPEN</b></code> signaling an error, you can use the keyword argument <code>:if-does-not-exist</code> to specify a different behavior. The three possible values are <code>:error</code>, the default; <code>:create</code>, which tells it to go ahead and create the file and then proceed as if it had already existed; and <code><b>NIL</b></code>, which tells it to return <code><b>NIL</b></code> instead of a stream. Thus, you can change the previous example to deal with the possibility that the file may not exist.
+        </p>
+        <pre>
+(let ((in (open "/some/file/name.txt" :if-does-not-exist nil)))
+  (when in
+    (format t "~a~%" (read-line in))
+    (close in)))
+</pre>
+        <p>
+            The reading functions--<code><b>READ-CHAR</b></code>, <code><b>READ-LINE</b></code>, and <code><b>READ</b></code>--all take an optional argument, which defaults to true, that specifies whether they should signal an error if they're called at the end of the file. If that argument is <code><b>NIL</b></code>, they instead return the value of their third argument, which defaults to <code><b>NIL</b></code>. Thus, you could print all the lines in a file like this:
+        </p>
+        <pre>
+(let ((in (open "/some/file/name.txt" :if-does-not-exist nil)))
+  (when in
+    (loop for line = (read-line in nil)
+         while line do (format t "~a~%" line))
+    (close in)))
+</pre>
+        <p>
+            Of the three text-reading functions, <code><b>READ</b></code> is unique to Lisp. This is the same function that provides the <i>R</i> in the REPL and that's used to read Lisp source code. Each time it's called, it reads a single s-expression, skipping whitespace and comments, and returns the Lisp object denoted by the s-expression. For instance, suppose <code>/some/file/name.txt</code> has the following contents:
+        </p>
+        <pre>
+(1 2 3)
+456
+"a string" ; this is a comment
+((a b)
+ (c d))
+</pre>
+        <p>
+            In other words, it contains four s-expressions: a list of numbers, a number, a string, and a list of lists. You can read those expressions like this:
+        </p>
+        <pre>
+CL-USER&gt; (defparameter *s* (open "/some/file/name.txt"))
+*S*
+CL-USER&gt; (read *s*)
+(1 2 3)
+CL-USER&gt; (read *s*)
+456
+CL-USER&gt; (read *s*)
+"a string"
+CL-USER&gt; (read *s*)
+((A B) (C D))
+CL-USER&gt; (close *s*)
+T
+</pre>
+        <p>
+            As you saw in Chapter 3, you can use <code><b>PRINT</b></code> to print Lisp objects in "readable" form. Thus, whenever you need to store a bit of data in a file, <code><b>PRINT</b></code> and <code><b>READ</b></code> provide an easy way to do it without having to design a data format or write a parser. They even--as the previous example demonstrated--give you comments for free. And because s-expressions were designed to be human editable, it's also a fine format for things like configuration files.<sup>1</sup>
+        </p>
+        <h2>
+            <a name="reading-binary-data" id="reading-binary-data">Reading Binary Data</a>
+        </h2>
+        <p>
+            By default <code><b>OPEN</b></code> returns character streams, which translate the underlying bytes to characters according to a particular character-encoding scheme.<sup>2</sup> To read the raw bytes, you need to pass <code><b>OPEN</b></code> an <code>:element-type</code> argument of <code>'(unsigned-byte 8)</code>.<sup>3</sup> You can pass the resulting stream to the function <code><b>READ-BYTE</b></code>, which will return an integer between 0 and 255 each time it's called. <code><b>READ-BYTE</b></code>, like the character-reading functions, also accepts optional arguments to specify whether it should signal an error if called at the end of the file and what value to return if not. In Chapter 24 you'll build a library that allows you to conveniently read structured binary data using <code><b>READ-BYTE</b></code>.<sup>4</sup>
+        </p>
+        <h2>
+            <a name="bulk-reads" id="bulk-reads">Bulk Reads</a>
+        </h2>
+        <p>
+            One last reading function, <code><b>READ-SEQUENCE</b></code>, works with both character and binary streams. You pass it a sequence (typically a vector) and a stream, and it attempts to fill the sequence with data from the stream. It returns the index of the first element of the sequence that wasn't filled or the length of the sequence if it was able to completely fill it. You can also pass <code>:start</code> and <code>:end</code> keyword arguments to specify a subsequence that should be filled instead. The sequence argument must be a type that can hold elements of the stream's element type. Since most operating systems support some form of block I/O, <code><b>READ-SEQUENCE</b></code> is likely to be quite a bit more efficient than filling a sequence by repeatedly calling <code><b>READ-BYTE</b></code> or <code><b>READ-CHAR</b></code>.
+        </p>
+        <h2>
+            <a name="file-output" id="file-output">File Output</a>
+        </h2>
+        <p>
+            To write data to a file, you need an output stream, which you obtain by calling <code><b>OPEN</b></code> with a <code>:direction</code> keyword argument of <code>:output</code>. When opening a file for output, <code><b>OPEN</b></code> assumes the file shouldn't already exist and will signal an error if it does. However, you can change that behavior with the <code>:if-exists</code> keyword argument. Passing the value <code>:supersede</code> tells <code><b>OPEN</b></code> to replace the existing file. Passing <code>:append</code> causes <code><b>OPEN</b></code> to open the existing file such that new data will be written at the end of the file, while <code>:overwrite</code> returns a stream that will overwrite existing data starting from the beginning of the file. And passing <code><b>NIL</b></code> will cause <code><b>OPEN</b></code> to return <code><b>NIL</b></code> instead of a stream if the file already exists. A typical use of <code><b>OPEN</b></code> for output looks like this:
+        </p>
+        <pre>
+(open "/some/file/name.txt" :direction :output :if-exists :supersede)
+</pre>
+        <p>
+            Common Lisp also provides several functions for writing data: <code><b>WRITE-CHAR</b></code> writes a single character to the stream. <code><b>WRITE-LINE</b></code> writes a string followed by a newline, which will be output as the appropriate end-of-line character or characters for the platform. Another function, <code><b>WRITE-STRING</b></code>, writes a string without adding any end-of-line characters. Two different functions can print just a newline: <code><b>TERPRI</b></code>--short for "terminate print"--unconditionally prints a newline character, and <code><b>FRESH-LINE</b></code> prints a newline character unless the stream is at the beginning of a line. <code><b>FRESH-LINE</b></code> is handy when you want to avoid spurious blank lines in textual output generated by different functions called in sequence. For example, suppose you have one function that generates output that should always be followed by a line break and another that should start on a new line. But assume that if the functions are called one after the other, you don't want a blank line between the two bits of output. If you use <code><b>FRESH-LINE</b></code> at the beginning of the second function, its output will always start on a new line, but if it's called right after the first, it won't emit an extra line break.
+        </p>
+        <p>
+            Several functions output Lisp data as s-expressions: <code><b>PRINT</b></code> prints an s-expression preceded by an end-of-line and followed by a space. <code><b>PRIN1</b></code> prints just the s-expression. And the function <code><b>PPRINT</b></code> prints s-expressions like <code><b>PRINT</b></code> and <code><b>PRIN1</b></code> but using the "pretty printer," which tries to print its output in an aesthetically pleasing way.
+        </p>
+        <p>
+            However, not all objects can be printed in a form that <code><b>READ</b></code> will understand. The variable <code><b>*PRINT-READABLY*</b></code> controls what happens if you try to print such an object with <code><b>PRINT</b></code>, <code><b>PRIN1</b></code>, or <code><b>PPRINT</b></code>. When it's <code><b>NIL</b></code>, these functions will print the object in a special syntax that's guaranteed to cause <code><b>READ</b></code> to signal an error if it tries to read it; otherwise they will signal an error rather than print the object.
+        </p>
+        <p>
+            Another function, <code><b>PRINC</b></code>, also prints Lisp objects, but in a way designed for human consumption. For instance, <code><b>PRINC</b></code> prints strings without quotation marks. You can generate more elaborate text output with the incredibly flexible if somewhat arcane <code><b>FORMAT</b></code> function. I'll discuss some of the more important details of <code><b>FORMAT</b></code>, which essentially defines a mini-language for emitting formatted output, in Chapter 18.
+        </p>
+        <p>
+            To write binary data to a file, you have to <code><b>OPEN</b></code> the file with the same <code>:element-type</code> argument as you did to read it: <code>'(unsigned-byte 8)</code>. You can then write individual bytes to the stream with <code><b>WRITE-BYTE</b></code>.
+        </p>
+        <p>
+            The bulk output function <code><b>WRITE-SEQUENCE</b></code> accepts both binary and character streams as long as all the elements of the sequence are of an appropriate type for the stream, either characters or bytes. As with <code><b>READ-SEQUENCE</b></code>, this function is likely to be quite a bit more efficient than writing the elements of the sequence one at a time.
+        </p>
+        <h2>
+            <a name="closing-files" id="closing-files">Closing Files</a>
+        </h2>
+        <p>
+            As anyone who has written code that deals with lots of files knows, it's important to close files when you're done with them, because file handles tend to be a scarce resource. If you open files and don't close them, you'll soon discover you can't open any more files.<sup>5</sup> It might seem straightforward enough to just be sure every <code><b>OPEN</b></code> has a matching <code><b>CLOSE</b></code>. For instance, you could always structure your file using code like this:
+        </p>
+        <pre>
+(let ((stream (open "/some/file/name.txt")))
+  ;; do stuff with stream
+  (close stream))
+</pre>
+        <p>
+            However, this approach suffers from two problems. One is simply that it's error prone--if you forget the <code><b>CLOSE</b></code>, the code will leak a file handle every time it runs. The other--and more significant--problem is that there's no guarantee you'll get to the <code><b>CLOSE</b></code>. For instance, if the code prior to the <code><b>CLOSE</b></code> contains a <code><b>RETURN</b></code> or <code><b>RETURN-FROM</b></code>, you could leave the <code><b>LET</b></code> without closing the stream. Or, as you'll see in Chapter 19, if any of the code before the <code><b>CLOSE</b></code> signals an error, control may jump out of the <code><b>LET</b></code> to an error handler and never come back to close the stream.
+        </p>
+        <p>
+            Common Lisp provides a general solution to the problem of how to ensure that certain code always runs: the special operator <code><b>UNWIND-PROTECT</b></code>, which I'll discuss in Chapter 20. However, because the pattern of opening a file, doing something with the resulting stream, and then closing the stream is so common, Common Lisp provides a macro, <code><b>WITH-OPEN-FILE</b></code>, built on top of <code><b>UNWIND-PROTECT</b></code>, to encapsulate this pattern. This is the basic form:
+        </p>
+        <pre>
+(with-open-file (<i>stream-var</i> <i>open-argument*</i>)
+  <i>body-form*</i>)
+</pre>
+        <p>
+            The forms in <i>body-forms</i> are evaluated with <i>stream-var</i> bound to a file stream opened by a call to <code><b>OPEN</b></code> with <i>open-arguments</i> as its arguments. <code><b>WITH-OPEN-FILE</b></code> then ensures the stream in <i>stream-var</i> is closed before the <code><b>WITH-OPEN-FILE</b></code> form returns. Thus, you can write this to read a line from a file:
+        </p>
+        <pre>
+(with-open-file (stream "/some/file/name.txt")
+  (format t "~a~%" (read-line stream)))
+</pre>
+        <p>
+            To create a new file, you can write something like this:
+        </p>
+        <pre>
+(with-open-file (stream "/some/file/name.txt" :direction :output)
+  (format stream "Some text."))
+</pre>
+        <p>
+            You'll probably use <code><b>WITH-OPEN-FILE</b></code> for 90-99 percent of the file I/O you do--the only time you need to use raw <code><b>OPEN</b></code> and <code><b>CLOSE</b></code> calls is if you need to open a file in a function and keep the stream around after the function returns. In that case, you must take care to eventually close the stream yourself, or you'll leak file descriptors and may eventually end up unable to open any more files.
+        </p>
+        <h2>
+            <a name="filenames" id="filenames">Filenames</a>
+        </h2>
+        <p>
+            So far you've used strings to represent filenames. However, using strings as filenames ties your code to a particular operating system and file system. Likewise, if you programmatically construct names according to the rules of a particular naming scheme (separating directories with /, say), you also tie your code to a particular file system.
+        </p>
+        <p>
+            To avoid this kind of nonportability, Common Lisp provides another representation of filenames: pathname objects. Pathnames represent filenames in a structured way that makes them easy to manipulate without tying them to a particular filename syntax. And the burden of translating back and forth between strings in the local syntax--called <i>namestrings</i>--and pathnames is placed on the Lisp implementation.
+        </p>
+        <p>
+            Unfortunately, as with many abstractions designed to hide the details of fundamentally different underlying systems, the pathname abstraction introduces its own complications. When pathnames were designed, the set of file systems in general use was quite a bit more variegated than those in common use today. Consequently, some nooks and crannies of the pathname abstraction make little sense if all you're concerned about is representing Unix or Windows filenames. However, once you understand which parts of the pathname abstraction you can ignore as artifacts of pathnames' evolutionary history, they do provide a convenient way to manipulate filenames.<sup>6</sup>
+        </p>
+        <p>
+            Most places a filename is called for, you can use either a namestring or a pathname. Which to use depends mostly on where the name originated. Filenames provided by the user--for example, as arguments or as values in configuration files--will typically be namestrings, since the user knows what operating system they're running on and shouldn't be expected to care about the details of how Lisp represents filenames. But programmatically generated filenames will be pathnames because you can create them portably. A stream returned by <code><b>OPEN</b></code> also represents a filename, namely, the filename that was originally used to open the stream. Together these three types are collectively referred to as <i>pathname designators</i>. All the built-in functions that expect a filename argument accept all three types of pathname designator. For instance, all the places in the previous section where you used a string to represent a filename, you could also have passed a pathname object or a stream.
+        </p>
+        <div class="sidebarhead">
+            How We Got Here
+        </div>
+        <div class="sidebar">
+            <p>
+                The historical diversity of file systems in existence during the 70s and 80s can be easy to forget. Kent Pitman, one of the principal technical editors of the Common Lisp standard, described the situation once in comp.lang.lisp (Message-ID: <code>sfwzo74np6w.fsf@world.std.com</code>) thusly:
+            </p>
+            <blockquote>
+                The dominant file systems at the time the design [of Common Lisp] was done were TOPS-10, TENEX, TOPS-20, VAX VMS, AT&amp;T Unix, MIT Multics, MIT ITS, not to mention a bunch of mainframe [OSs]. Some were uppercase only, some mixed, some were case-sensitive but case- translating (like CL). Some had dirs as files, some not. Some had quote chars for funny file chars, some not. Some had wildcards, some didn't. Some had :up in relative pathnames, some didn't. Some had namable root dirs, some didn't. There were file systems with no directories, file systems with non-hierarchical directories, file systems with no file types, file systems with no versions, file systems with no devices, and so on.
+            </blockquote>
+            <p>
+                If you look at the pathname abstraction from the point of view of any single file system, it seems baroque. However, if you take even two such similar file systems as Windows and Unix, you can already begin to see differences the pathname system can help abstract away--Windows filenames contain a drive letter, for instance, while Unix filenames don't. The other advantage of having the pathname abstraction designed to handle the wide variety of file systems that existed in the past is that it's more likely to be able to handle file systems that may exist in the future. If, say, versioning file systems come back into vogue, Common Lisp will be ready.
+            </p>
+        </div>
+        <h2>
+            <a name="how-pathnames-represent-filenames" id="how-pathnames-represent-filenames">How Pathnames Represent Filenames</a>
+        </h2>
+        <p>
+            A pathname is a structured object that represents a filename using six components: host, device, directory, name, type, and version. Most of these components take on atomic values, usually strings; only the directory component is further structured, containing a list of directory names (as strings) prefaced with the keyword <code>:absolute</code> or <code>:relative</code>. However, not all pathname components are needed on all platforms--this is one of the reasons pathnames strike many new Lispers as gratuitously complex. On the other hand, you don't really need to worry about which components may or may not be used to represent names on a particular file system unless you need to create a new pathname object from scratch, which you'll almost never need to do. Instead, you'll usually get hold of pathname objects either by letting the implementation parse a file system-specific namestring into a pathname object or by creating a new pathname that takes most of its components from an existing pathname.
+        </p>
+        <p>
+            For instance, to translate a namestring to a pathname, you use the <code><b>PATHNAME</b></code> function. It takes a pathname designator and returns an equivalent pathname object. When the designator is already a pathname, it's simply returned. When it's a stream, the original filename is extracted and returned. When the designator is a namestring, however, it's parsed according to the local filename syntax. The language standard, as a platform-neutral document, doesn't specify any particular mapping from namestring to pathname, but most implementations follow the same conventions on a given operating system.
+        </p>
+        <p>
+            On Unix file systems, only the directory, name, and type components are typically used. On Windows, one more component--usually the device or host--holds the drive letter. On these platforms, a namestring is parsed by first splitting it into elements on the path separator--a slash on Unix and a slash or backslash on Windows. The drive letter on Windows will be placed into either the device or the host component. All but the last of the other name elements are placed in a list starting with <code>:absolute</code> or <code>:relative</code> depending on whether the name (ignoring the drive letter, if any) began with a path separator. This list becomes the directory component of the pathname. The last element is then split on the rightmost dot, if any, and the two parts put into the name and type components of the pathname.<sup>7</sup>
+        </p>
+        <p>
+            You can examine these individual components of a pathname with the functions <code><b>PATHNAME-DIRECTORY</b></code>, <code><b>PATHNAME-NAME</b></code>, and <code><b>PATHNAME-TYPE</b></code>.
+        </p>
+        <pre>
+(pathname-directory (pathname "/foo/bar/baz.txt")) ==&gt; (:ABSOLUTE "foo" "bar")
+(pathname-name (pathname "/foo/bar/baz.txt"))      ==&gt; "baz"
+(pathname-type (pathname "/foo/bar/baz.txt"))      ==&gt; "txt"
+</pre>
+        <p>
+            Three other functions--<code><b>PATHNAME-HOST</b></code>, <code><b>PATHNAME-DEVICE</b></code>, and <code><b>PATHNAME-VERSION</b></code>--allow you to get at the other three pathname components, though they're unlikely to have interesting values on Unix. On Windows either <code><b>PATHNAME-HOST</b></code> or <code><b>PATHNAME-DEVICE</b></code> will return the drive letter.
+        </p>
+        <p>
+            Like many other built-in objects, pathnames have their own read syntax, <code>#p</code> followed by a double-quoted string. This allows you to print and read back s-expressions containing pathname objects, but because the syntax depends on the namestring parsing algorithm, such data isn't necessarily portable between operating systems.
+        </p>
+        <pre>
+(pathname "/foo/bar/baz.txt") ==&gt; #p"/foo/bar/baz.txt"
+</pre>
+        <p>
+            To translate a pathname back to a namestring--for instance, to present to the user--you can use the function <code><b>NAMESTRING</b></code>, which takes a pathname designator and returns a namestring. Two other functions, <code><b>DIRECTORY-NAMESTRING</b></code> and <code><b>FILE-NAMESTRING</b></code>, return a partial namestring. <code><b>DIRECTORY-NAMESTRING</b></code> combines the elements of the directory component into a local directory name, and <code><b>FILE-NAMESTRING</b></code> combines the name and type components.<sup>8</sup>
+        </p>
+        <pre>
+(namestring #p"/foo/bar/baz.txt")           ==&gt; "/foo/bar/baz.txt"
+(directory-namestring #p"/foo/bar/baz.txt") ==&gt; "/foo/bar/"
+(file-namestring #p"/foo/bar/baz.txt")      ==&gt; "baz.txt"
+</pre>
+        <h2>
+            <a name="constructing-new-pathnames" id="constructing-new-pathnames">Constructing New Pathnames</a>
+        </h2>
+        <p>
+            You can construct arbitrary pathnames using the <code><b>MAKE-PATHNAME</b></code> function. It takes one keyword argument for each pathname component and returns a pathname with any supplied components filled in and the rest <code><b>NIL</b></code>.<sup>9</sup>
+        </p>
+        <pre>
+(make-pathname
+  :directory '(:absolute "foo" "bar")
+  :name "baz"
+  :type "txt") ==&gt; #p"/foo/bar/baz.txt"
+</pre>
+        <p>
+            However, if you want your programs to be portable, you probably don't want to make pathnames completely from scratch: even though the pathname abstraction protects you from unportable filename syntax, filenames can be unportable in other ways. For instance, the filename <code>/home/peter/foo.txt</code> is no good on an OS X box where <code>/home/</code> is called <code>/Users/</code>.
+        </p>
+        <p>
+            Another reason not to make pathnames completely from scratch is that different implementations use the pathname components slightly differently. For instance, as mentioned previously, some Windows-based Lisp implementations store the drive letter in the device component while others store it in the host component. If you write code like this:
+        </p>
+        <pre>
+(make-pathname :device "c" :directory '(:absolute "foo" "bar") :name "baz")
+</pre>
+        <p>
+            it will be correct on some implementations but not on others.
+        </p>
+        <p>
+            Rather than making names from scratch, you can build a new pathname based on an existing pathname with <code><b>MAKE-PATHNAME</b></code>'s keyword parameter <code>:defaults</code>. With this parameter you can provide a pathname designator, which will supply the values for any components not specified by other arguments. For example, the following expression creates a pathname with an <code>.html</code> extension and all other components the same as the pathname in the variable <code>input-file</code>:
+        </p>
+        <pre>
+(make-pathname :type "html" :defaults input-file)
+</pre>
+        <p>
+            Assuming the value in <code>input-file</code> was a user-provided name, this code will be robust in the face of operating system and implementation differences such as whether filenames have drive letters in them and where they're stored in a pathname if they do.<sup>10</sup>
+        </p>
+        <p>
+            You can use the same technique to create a pathname with a different directory component.
+        </p>
+        <pre>
+(make-pathname :directory '(:relative "backups") :defaults input-file)
+</pre>
+        <p>
+            However, this will create a pathname whose whole directory component is the relative directory <code>backups/</code>, regardless of any directory component <code>input-file</code> may have had. For example:
+        </p>
+        <pre>
+(make-pathname :directory '(:relative "backups")
+               :defaults #p"/foo/bar/baz.txt") ==&gt; #p"backups/baz.txt"
+</pre>
+        <p>
+            Sometimes, though, you want to combine two pathnames, at least one of which has a relative directory component, by combining their directory components. For instance, suppose you have a relative pathname such as <code>#p"foo/bar.html"</code> that you want to combine with an absolute pathname such as <code>#p"/www/html/"</code> to get <code>#p"/www/html/foo/bar.html"</code>. In that case, <code><b>MAKE-PATHNAME</b></code> won't do; instead, you want <code><b>MERGE-PATHNAMES</b></code>.
+        </p>
+        <p>
+            <code><b>MERGE-PATHNAMES</b></code> takes two pathnames and merges them, filling in any <code><b>NIL</b></code> components in the first pathname with the corresponding value from the second pathname, much like <code><b>MAKE-PATHNAME</b></code> fills in any unspecified components with components from the <code>:defaults</code> argument. However, <code><b>MERGE-PATHNAMES</b></code> treats the directory component specially: if the first pathname's directory is relative, the directory component of the resulting pathname will be the first pathname's directory relative to the second pathname's directory. Thus:
+        </p>
+        <pre>
+(merge-pathnames #p"foo/bar.html" #p"/www/html/") ==&gt; #p"/www/html/foo/bar.html"
+</pre>
+        <p>
+            The second pathname can also be relative, in which case the resulting pathname will also be relative.
+        </p>
+        <pre>
+(merge-pathnames #p"foo/bar.html" #p"html/") ==&gt; #p"html/foo/bar.html"
+</pre>
+        <p>
+            To reverse this process and obtain a filename relative to a particular root directory, you can use the handy function <code><b>ENOUGH-NAMESTRING</b></code>.
+        </p>
+        <pre>
+(enough-namestring #p"/www/html/foo/bar.html" #p"/www/") ==&gt; "html/foo/bar.html"
+</pre>
+        <p>
+            You can then combine <code><b>ENOUGH-NAMESTRING</b></code> with <code><b>MERGE-PATHNAMES</b></code> to create a pathname representing the same name but in a different root.
+        </p>
+        <pre>
+(merge-pathnames
+  (enough-namestring #p"/www/html/foo/bar/baz.html" #p"/www/")
+  #p"/www-backups/") ==&gt; #p"/www-backups/html/foo/bar/baz.html"
+</pre>
+        <p>
+            <code><b>MERGE-PATHNAMES</b></code> is also used internally by the standard functions that actually access files in the file system to fill in incomplete pathnames. For instance, suppose you make a pathname with just a name and a type.
+        </p>
+        <pre>
+(make-pathname :name "foo" :type "txt") ==&gt; #p"foo.txt"
+</pre>
+        <p>
+            If you try to use this pathname as an argument to <code><b>OPEN</b></code>, the missing components, such as the directory, must be filled in before Lisp will be able to translate the pathname to an actual filename. Common Lisp will obtain values for the missing components by merging the given pathname with the value of the variable <code><b>*DEFAULT-PATHNAME-DEFAULTS*</b></code>. The initial value of this variable is determined by the implementation but is usually a pathname with a directory component representing the directory where Lisp was started and appropriate values for the host and device components, if needed. If invoked with just one argument, <code><b>MERGE-PATHNAMES</b></code> will merge the argument with the value of <code><b>*DEFAULT-PATHNAME-DEFAULTS*</b></code>. For instance, if <code><b>*DEFAULT-PATHNAME-DEFAULTS*</b></code> is <code>#p"/home/peter/"</code>, then you'd get the following:
+        </p>
+        <pre>
+(merge-pathnames #p"foo.txt") ==&gt; #p"/home/peter/foo.txt"
+</pre>
+        <h2>
+            <a name="two-representations-of-directory-names" id="two-representations-of-directory-names">Two Representations of Directory Names</a>
+        </h2>
+        <p>
+            When dealing with pathnames that name directories, you need to be aware of one wrinkle. Pathnames separate the directory and name components, but Unix and Windows consider directories just another kind of file. Thus, on those systems, every directory has two different pathname representations.
+        </p>
+        <p>
+            One representation, which I'll call <i>file form</i>, treats a directory like any other file and puts the last element of the namestring into the name and type components. The other representation, <i>directory form</i>, places all the elements of the name in the directory component, leaving the name and type components <code><b>NIL</b></code>. If <code>/foo/bar/</code> is a directory, then both of the following pathnames name it.
+        </p>
+        <pre>
+(make-pathname :directory '(:absolute "foo") :name "bar") ; file form
+(make-pathname :directory '(:absolute "foo" "bar"))       ; directory form
+</pre>
+        <p>
+            When you create pathnames with <code><b>MAKE-PATHNAME</b></code>, you can control which form you get, but you need to be careful when dealing with namestrings. All current implementations create file form pathnames unless the namestring ends with a path separator. But you can't rely on user-supplied namestrings necessarily being in one form or another. For instance, suppose you've prompted the user for a directory to save a file in and they entered <code>"/home/peter"</code>. If you pass that value as the <code>:defaults</code> argument of <code><b>MAKE-PATHNAME</b></code> like this:
+        </p>
+        <pre>
+(make-pathname :name "foo" :type "txt" :defaults user-supplied-name)
+</pre>
+        <p>
+            you'll end up saving the file in <code>/home/foo.txt</code> rather than the intended <code>/home/peter/foo.txt</code> because the <code>"peter"</code> in the namestring will be placed in the name component when <code>user-supplied-name</code> is converted to a pathname. In the pathname portability library I'll discuss in the next chapter, you'll write a function called <code>pathname-as-directory</code> that converts a pathname to directory form. With that function you can reliably save the file in the directory indicated by the user.
+        </p>
+        <pre>
+(make-pathname
+  :name "foo" :type "txt" :defaults (pathname-as-directory user-supplied-name))
+</pre>
+        <h2>
+            <a name="interacting-with-the-file-system" id="interacting-with-the-file-system">Interacting with the File System</a>
+        </h2>
+        <p>
+            While the most common interaction with the file system is probably <code><b>OPEN</b></code>ing files for reading and writing, you'll also occasionally want to test whether a file exists, list the contents of a directory, delete and rename files, create directories, and get information about a file such as who owns it, when it was last modified, and its length. This is where the generality of the pathname abstraction begins to cause a bit of pain: because the language standard doesn't specify how functions that interact with the file system map to any specific file system, implementers are left with a fair bit of leeway.
+        </p>
+        <p>
+            That said, most of the functions that interact with the file system are still pretty straightforward. I'll discuss the standard functions here and point out the ones that suffer from nonportability between implementations. In the next chapter you'll develop a pathname portability library to smooth over some of those nonportability issues.
+        </p>
+        <p>
+            To test whether a file exists in the file system corresponding to a pathname designator--a pathname, namestring, or file stream--you can use the function <code><b>PROBE-FILE</b></code>. If the file named by the pathname designator exists, <code><b>PROBE-FILE</b></code> returns the file's <i>truename</i>, a pathname with any file system-level translations such as resolving symbolic links performed. Otherwise, it returns <code><b>NIL</b></code>. However, not all implementations support using this function to test whether a directory exists. Also, Common Lisp doesn't provide a portable way to test whether a given file that exists is a regular file or a directory. In the next chapter you'll wrap <code><b>PROBE-FILE</b></code> with a new function, <code>file-exists-p</code>, that can both test whether a directory exists and tell you whether a given name is the name of a file or directory.
+        </p>
+        <p>
+            Similarly, the standard function for listing files in the file system, <code><b>DIRECTORY</b></code>, works fine for simple cases, but the differences between implementations make it tricky to use portably. In the next chapter you'll define a <code>list-directory</code> function that smoothes over some of these differences.
+        </p>
+        <p>
+            <code><b>DELETE-FILE</b></code> and <code><b>RENAME-FILE</b></code> do what their names suggest. <code><b>DELETE-FILE</b></code> takes a pathname designator and deletes the named file, returning true if it succeeds. Otherwise it signals a <code><b>FILE-ERROR</b></code>.<sup>11</sup>
+        </p>
+        <p>
+            <code><b>RENAME-FILE</b></code> takes two pathname designators and renames the file named by the first name to the second name.
+        </p>
+        <p>
+            You can create directories with the function <code><b>ENSURE-DIRECTORIES-EXIST</b></code>. It takes a pathname designator and ensures that all the elements of the directory component exist and are directories, creating them as necessary. It returns the pathname it was passed, which makes it convenient to use inline.
+        </p>
+        <pre>
+(with-open-file (out (ensure-directories-exist name) :direction :output)
+   ...
+   )
+</pre>
+        <p>
+            Note that if you pass <code><b>ENSURE-DIRECTORIES-EXIST</b></code> a directory name, it should be in directory form, or the leaf directory won't be created.
+        </p>
+        <p>
+            The functions <code><b>FILE-WRITE-DATE</b></code> and <code><b>FILE-AUTHOR</b></code> both take a pathname designator. <code><b>FILE-WRITE-DATE</b></code> returns the time in number of seconds since midnight January 1, 1900, Greenwich mean time (GMT), that the file was last written, and <code><b>FILE-AUTHOR</b></code> returns, on Unix and Windows, the file owner.<sup>12</sup>
+        </p>
+        <p>
+            To find the length of a file, you can use the function <code><b>FILE-LENGTH</b></code>. For historical reasons <code><b>FILE-LENGTH</b></code> takes a stream as an argument rather than a pathname. In theory this allows <code><b>FILE-LENGTH</b></code> to return the length in terms of the element type of the stream. However, since on most present-day operating systems, the only information available about the length of a file, short of actually reading the whole file to measure it, is its length in bytes, that's what most implementations return, even when <code><b>FILE-LENGTH</b></code> is passed a character stream. However, the standard doesn't require this behavior, so for predictable results, the best way to get the length of a file is to use a binary stream.<sup>13</sup>
+        </p>
+        <pre>
+(with-open-file (in filename :element-type '(unsigned-byte 8))
+  (file-length in))
+</pre>
+        <p>
+            A related function that also takes an open file stream as its argument is <code><b>FILE-POSITION</b></code>. When called with just a stream, this function returns the current position in the file--the number of elements that have been read from or written to the stream. When called with two arguments, the stream and a position designator, it sets the position of the stream to the designated position. The position designator must be the keyword <code>:start</code>, the keyword <code>:end</code>, or a non-negative integer. The two keywords set the position of the stream to the start or end of the file while an integer moves to the indicated position in the file. With a binary stream the position is simply a byte offset into the file. However, for character streams things are a bit more complicated because of character-encoding issues. Your best bet, if you need to jump around within a file of textual data, is to only ever pass, as a second argument to the two-argument version of <code><b>FILE-POSITION</b></code>, a value previously returned by the one-argument version of <code><b>FILE-POSITION</b></code> with the same stream argument.
+        </p>
+        <h2>
+            <a name="other-kinds-of-io" id="other-kinds-of-io">Other Kinds of I/O</a>
+        </h2>
+        <p>
+            In addition to file streams, Common Lisp supports other kinds of streams, which can also be used with the various reading, writing, and printing I/O functions. For instance, you can read data from, or write data to, a string using <code><b>STRING-STREAM</b></code>s, which you can create with the functions <code><b>MAKE-STRING-INPUT-STREAM</b></code> and <code><b>MAKE-STRING-OUTPUT-STREAM</b></code>.
+        </p>
+        <p>
+            <code><b>MAKE-STRING-INPUT-STREAM</b></code> takes a string and optional start and end indices to bound the area of the string from which data should be read and returns a character stream that you can pass to any of the character-based input functions such as <code><b>READ-CHAR</b></code>, <code><b>READ-LINE</b></code>, or <code><b>READ</b></code>. For example, if you have a string containing a floating-point literal in Common Lisp's syntax, you can convert it to a float like this:
+        </p>
+        <pre>
+(let ((s (make-string-input-stream "1.23")))
+  (unwind-protect (read s)
+    (close s)))
+</pre>
+        <p>
+            Similarly, <code><b>MAKE-STRING-OUTPUT-STREAM</b></code> creates a stream you can use with <code><b>FORMAT</b></code>, <code><b>PRINT</b></code>, <code><b>WRITE-CHAR</b></code>, <code><b>WRITE-LINE</b></code>, and so on. It takes no arguments. Whatever you write, a string output stream will be accumulated into a string that can then be obtained with the function <code><b>GET-OUTPUT-STREAM-STRING</b></code>. Each time you call <code><b>GET-OUTPUT-STREAM-STRING</b></code>, the stream's internal string is cleared so you can reuse an existing string output stream.
+        </p>
+        <p>
+            However, you'll rarely use these functions directly, because the macros <code><b>WITH-INPUT-FROM-STRING</b></code> and <code><b>WITH-OUTPUT-TO-STRING</b></code> provide a more convenient interface. <code><b>WITH-INPUT-FROM-STRING</b></code> is similar to <code><b>WITH-OPEN-FILE</b></code>--it creates a string input stream from a given string and then executes the forms in its body with the stream bound to the variable you provide. For instance, instead of the <code><b>LET</b></code> form with the explicit <code><b>UNWIND-PROTECT</b></code>, you'd probably write this:
+        </p>
+        <pre>
+(with-input-from-string (s "1.23")
+  (read s))
+</pre>
+        <p>
+            The <code><b>WITH-OUTPUT-TO-STRING</b></code> macro is similar: it binds a newly created string output stream to a variable you name and then executes its body. After all the body forms have been executed, <code><b>WITH-OUTPUT-TO-STRING</b></code> returns the value that would be returned by <code><b>GET-OUTPUT-STREAM-STRING</b></code>.
+        </p>
+        <pre>
+CL-USER&gt; (with-output-to-string (out)
+            (format out "hello, world ")
+            (format out "~s" (list 1 2 3)))
+"hello, world (1 2 3)"
+</pre>
+        <p>
+            The other kinds of streams defined in the language standard provide various kinds of stream "plumbing," allowing you to plug together streams in almost any configuration. A <code><b>BROADCAST-STREAM</b></code> is an output stream that sends any data written to it to a set of output streams provided as arguments to its constructor function, <code><b>MAKE-BROADCAST-STREAM</b></code>.<sup>14</sup> Conversely, a <code><b>CONCATENATED-STREAM</b></code> is an input stream that takes its input from a set of input streams, moving from stream to stream as it hits the end of each stream. <code><b>CONCATENATED-STREAM</b></code>s are constructed with the function <code><b>MAKE-CONCATENATED-STREAM</b></code>, which takes any number of input streams as arguments.
+        </p>
+        <p>
+            Two kinds of bidirectional streams that can plug together streams in a couple ways are <code><b>TWO-WAY-STREAM</b></code> and <code><b>ECHO-STREAM</b></code>. Their constructor functions, <code><b>MAKE-TWO-WAY-STREAM</b></code> and <code><b>MAKE-ECHO-STREAM</b></code>, both take two arguments, an input stream and an output stream, and return a stream of the appropriate type, which you can use with both input and output functions.
+        </p>
+        <p>
+            In a <code><b>TWO-WAY-STREAM</b></code> every read you perform will return data read from the underlying input stream, and every write will send data to the underlying output stream. An <code><b>ECHO-STREAM</b></code> works essentially the same way except that all the data read from the underlying input stream is also echoed to the output stream. Thus, the output stream of an <code><b>ECHO-STREAM</b></code> stream will contain a transcript of both sides of the conversation.
+        </p>
+        <p>
+            Using these five kinds of streams, you can build almost any topology of stream plumbing you want.
+        </p>
+        <p>
+            Finally, although the Common Lisp standard doesn't say anything about networking APIs, most implementations support socket programming and typically implement sockets as another kind of stream, so you can use all the regular I/O functions with them.<sup>15</sup>
+        </p>
+        <p>
+            Now you're ready to move on to building a library that smoothes over some of the differences between how the basic pathname functions behave in different Common Lisp implementations.
+        </p>
+        <hr>
+        <div class="notes">
+            <p>
+                <sup>1</sup>Note, however, that while the Lisp reader knows how to skip comments, it completely skips them. Thus, if you use <code><b>READ</b></code> to read in a configuration file containing comments and then use <code><b>PRINT</b></code> to save changes to the data, you'll lose the comments.
+            </p>
+            <p>
+                <sup>2</sup>By default <code><b>OPEN</b></code> uses the default character encoding for the operating system, but it also accepts a keyword parameter, <code>:external-format</code>, that can pass implementation-defined values that specify a different encoding. Character streams also translate the platform-specific end-of-line sequence to the single character <code>#\Newline</code>.
+            </p>
+            <p>
+                <sup>3</sup>The type <code>(unsigned-byte 8)</code> indicates an 8-bit byte; Common Lisp "byte" types aren't a fixed size since Lisp has run at various times on architectures with byte sizes from 6 to 9 bits, to say nothing of the PDP-10, which had individually addressable variable-length bit fields of 1 to 36 bits.
+            </p>
+            <p>
+                <sup>4</sup>In general, a stream is either a character stream or a binary stream, so you can't mix calls to <code><b>READ-BYTE</b></code> and <code><b>READ-CHAR</b></code> or other character-based read functions. However, some implementations, such as Allegro, support so-called bivalent streams, which support both character and binary I/O.
+            </p>
+            <p>
+                <sup>5</sup>Some folks expect this wouldn't be a problem in a garbage-collected language such as Lisp. It is the case in most Lisp implementations that a stream that becomes garbage will automatically be closed. However, this isn't something to rely on--the problem is that garbage collectors usually run only when memory is low; they don't know about other scarce resources such as file handles. If there's plenty of memory available, it's easy to run out of file handles long before the garbage collector runs.
+            </p>
+            <p>
+                <sup>6</sup>Another reason the pathname system is considered somewhat baroque is because of the inclusion of <i>logical pathnames</i>. However, you can use the rest of the pathname system perfectly well without knowing anything more about logical pathnames than that you can safely ignore them. Briefly, logical pathnames allow Common Lisp programs to contain references to pathnames without naming specific files. Logical pathnames could then be mapped to specific locations in an actual file system when the program was installed by defining a "logical pathname translation" that translates logical pathnames matching certain wildcards to pathnames representing files in the file system, so-called physical pathnames. They have their uses in certain situations, but you can get pretty far without worrying about them.
+            </p>
+            <p>
+                <sup>7</sup>Many Unix-based implementations treat filenames whose last element starts with a dot and don't contain any other dots specially, putting the whole element, with the dot, in the name component and leaving the type component <code><b>NIL</b></code>.
+            </p>
+            <pre>
+(pathname-name (pathname "/foo/.emacs")) ==&gt; ".emacs"
+(pathname-type (pathname "/foo/.emacs")) ==&gt; NIL
+</pre>
+            <p>
+                However, not all implementations follow this convention; some will create a pathname with "" as the name and <code>emacs</code> as the type.
+            </p>
+            <p>
+                <sup>8</sup>The name returned by <code><b>FILE-NAMESTRING</b></code> also includes the version component on file systems that use it.
+            </p>
+            <p>
+                <sup>9</sup>The host component may not default to <code><b>NIL</b></code>, but if not, it will be an opaque implementation-defined value.
+            </p>
+            <p>
+                <sup>10</sup>For absolutely maximum portability, you should really write this:
+            </p>
+            <pre>
+(make-pathname :type "html" :version :newest :defaults input-file)
+</pre>
+            <p>
+                Without the <code>:version</code> argument, on a file system with built-in versioning, the output pathname would inherit its version number from the input file which isn't likely to be right--if the input file has been saved many times it will have a much higher version number than the generated HTML file. On implementations without file versioning, the <code>:version</code> argument should be ignored. It's up to you if you care that much about portability.
+            </p>
+            <p>
+                <sup>11</sup>See Chapter 19 for more on handling errors.
+            </p>
+            <p>
+                <sup>12</sup>For applications that need access to other file attributes on a particular operating system or file system, libraries provide bindings to underlying C system calls. The Osicat library at <code>http://common-lisp.net/project/osicat/</code> provides a simple API built using the Universal Foreign Function Interface (UFFI), which should run on most Common Lisps that run on a POSIX operating system.
+            </p>
+            <p>
+                <sup>13</sup>The number of bytes and characters in a file can differ even if you're not using a multibyte character encoding. Because character streams also translate platform-specific line endings to a single <code>#\Newline</code> character, on Windows (which uses CRLF as its line ending) the number of characters will typically be smaller than the number of bytes. If you really have to know the number of characters in a file, you have to bite the bullet and write something like this:
+            </p>
+            <pre>
+(with-open-file (in filename)
+  (loop while (read-char in nil) count t))
+</pre>
+            <p>
+                or maybe something more efficient like this:
+            </p>
+            <pre>
+(with-open-file (in filename)
+  (let ((scratch (make-string 4096)))
+    (loop for read = (read-sequence scratch in)
+          while (plusp read) sum read)))
+</pre>
+            <p>
+                <sup>14</sup><code><b>MAKE-BROADCAST-STREAM</b></code> can make a data black hole by calling it with no arguments.
+            </p>
+            <p>
+                <sup>15</sup>The biggest missing piece in Common Lisp's standard I/O facilities is a way for users to define new stream classes. There are, however, two de facto standards for user-defined streams. During the Common Lisp standardization, David Gray of Texas Instruments wrote a draft proposal for an API to allow users to define new stream classes. Unfortunately, there wasn't time to work out all the issues raised by his draft to include it in the language standard. However, many implementations support some form of so-called Gray Streams, basing their API on Gray's draft proposal. Another, newer API, called Simple Streams, has been developed by Franz and included in Allegro Common Lisp. It was designed to improve the performance of user-defined streams relative to Gray Streams and has been adopted by some of the open-source Common Lisp implementations.
+            </p>
+        </div>
+        <div class="copyright">
+            Copyright © 2003-2005, Peter Seibel
+        </div>
+    </body>
+</html>

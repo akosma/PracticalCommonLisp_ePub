@@ -1,0 +1,586 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.01//EN">
+<html>
+    <head>
+        <title>
+            Numbers, Characters, and Strings
+        </title>
+        <link rel="stylesheet" type="text/css" href="style.css">
+    </head>
+    <body>
+        <h1>
+            10. Numbers, Characters, and Strings
+        </h1>
+        <p>
+            While functions, variables, macros, and 25 special operators provide the basic building blocks of the language itself, the building blocks of your programs will be the data structures you use. As Fred Brooks observed in <i>The Mythical Man-Month</i>, "Representation <i>is</i> the essence of programming."<sup>1</sup>
+        </p>
+        <p>
+            Common Lisp provides built-in support for most of the data types typically found in modern languages: numbers (integer, floating point, and complex), characters, strings, arrays (including multidimensional arrays), lists, hash tables, input and output streams, and an abstraction for portably representing filenames. Functions are also a first-class data type in Lisp--they can be stored in variables, passed as arguments, returned as return values, and created at runtime.
+        </p>
+        <p>
+            And these built-in types are just the beginning. They're defined in the language standard so programmers can count on them being available and because they tend to be easier to implement efficiently when tightly integrated with the rest of the implementation. But, as you'll see in later chapters, Common Lisp also provides several ways for you to define new data types, define operations on them, and integrate them with the built-in data types.
+        </p>
+        <p>
+            For now, however, you can start with the built-in data types. Because Lisp is a high-level language, the details of exactly how different data types are implemented are largely hidden. From your point of view as a user of the language, the built-in data types are defined by the functions that operate on them. So to learn a data type, you just have to learn about the functions you can use with it. Additionally, most of the built-in data types have a special syntax that the Lisp reader understands and that the Lisp printer uses. That's why, for instance, you can write strings as <code>"foo"</code>; numbers as <code>123</code>, <code>1/23</code>, and <code>1.23</code>; and lists as <code>(a b c)</code>. I'll describe the syntax for different kinds of objects when I describe the functions for manipulating them.
+        </p>
+        <p>
+            In this chapter, I'll cover the built-in "scalar" data types: numbers, characters, and strings. Technically, strings aren't true scalars--a string is a sequence of characters, and you can access individual characters and manipulate strings with a function that operates on sequences. But I'll discuss strings here because most of the string-specific functions manipulate them as single values and also because of the close relation between several of the string functions and their character counterparts.
+        </p>
+        <h2>
+            <a name="numbers" id="numbers">Numbers</a>
+        </h2>
+        <p>
+            Math, as Barbie says, is hard.<sup>2</sup> Common Lisp can't make the math part any easier, but it does tend to get in the way a lot less than other programming languages. That's not surprising given its mathematical heritage. Lisp was originally designed by a mathematician as a tool for studying mathematical functions. And one of the main projects of the MAC project at MIT was the Macsyma symbolic algebra system, written in Maclisp, one of Common Lisp's immediate predecessors. Additionally, Lisp has been used as a teaching language at places such as MIT where even the computer science professors cringe at the thought of telling their students that <i>10/4 = 2</i>, leading to Lisp's support for exact ratios. And at various times Lisp has been called upon to compete with FORTRAN in the high-performance numeric computing arena.
+        </p>
+        <p>
+            One of the reasons Lisp is a nice language for math is its numbers behave more like true mathematical numbers than the approximations of numbers that are easy to implement in finite computer hardware. For instance, integers in Common Lisp can be almost arbitrarily large rather than being limited by the size of a machine word.<sup>3</sup> And dividing two integers results in an exact ratio, not a truncated value. And since ratios are represented as pairs of arbitrarily sized integers, ratios can represent arbitrarily precise fractions.<sup>4</sup>
+        </p>
+        <p>
+            On the other hand, for high-performance numeric programming, you may be willing to trade the exactitude of rationals for the speed offered by using the hardware's underlying floating-point operations. So, Common Lisp also offers several types of floating-point numbers, which are mapped by the implementation to the appropriate hardware-supported floating-point representations.<sup>5</sup> Floats are also used to represent the results of a computation whose true mathematical value would be an irrational number.
+        </p>
+        <p>
+            Finally, Common Lisp supports complex numbers--the numbers that result from doing things such as taking square roots and logarithms of negative numbers. The Common Lisp standard even goes so far as to specify the principal values and branch cuts for irrational and transcendental functions on the complex domain.
+        </p>
+        <h2>
+            <a name="numeric-literals" id="numeric-literals">Numeric Literals</a>
+        </h2>
+        <p>
+            You can write numeric literals in a variety of ways; you saw a few examples in Chapter 4. However, it's important to keep in mind the division of labor between the Lisp reader and the Lisp evaluator--the reader is responsible for translating text into Lisp objects, and the Lisp evaluator then deals only with those objects. For a given number of a given type, there can be many different textual representations, all of which will be translated to the same object representation by the Lisp reader. For instance, you can write the integer 10 as <code>10</code>, <code>20/2</code>, <code>#xA</code>, or any of a number of other ways, but the reader will translate all these to the same object. When numbers are printed back out--say, at the REPL--they're printed in a canonical textual syntax that may be different from the syntax used to enter the number. For example:
+        </p>
+        <pre>
+CL-USER&gt; 10
+10
+CL-USER&gt; 20/2
+10
+CL-USER&gt; #xa
+10
+</pre>
+        <p>
+            The syntax for integer values is an optional sign (<code>+</code> or <code>-</code>) followed by one or more digits. Ratios are written as an optional sign and a sequence of digits, representing the numerator, a slash (<code>/</code>), and another sequence of digits representing the denominator. All rational numbers are "canonicalized" as they're read--that's why <code>10</code> and <code>20/2</code> are both read as the same number, as are <code>3/4</code> and <code>6/8</code>. Rationals are printed in "reduced" form--integer values are printed in integer syntax and ratios with the numerator and denominator reduced to lowest terms.
+        </p>
+        <p>
+            It's also possible to write rationals in bases other than 10. If preceded by <code>#B</code> or <code>#b</code>, a rational literal is read as a binary number with <code>0</code> and <code>1</code> as the only legal digits. An <code>#O</code> or <code>#o</code> indicates an octal number (legal digits <code>0</code>-<code>7</code>), and <code>#X</code> or <code>#x</code> indicates hexadecimal (legal digits <code>0</code>-<code>F</code> or <code>0</code>-<code>f</code>). You can write rationals in other bases from 2 to 36 with <code>#nR</code> where <i>n</i> is the base (always written in decimal). Additional "digits" beyond 9 are taken from the letters <code>A</code>-<code>Z</code> or <code>a</code>-<code>z</code>. Note that these radix indicators apply to the whole rational--it's not possible to write a ratio with the numerator in one base and denominator in another. Also, you can write integer values, but not ratios, as decimal digits terminated with a decimal point.<sup>6</sup> Some examples of rationals, with their canonical, decimal representation are as follows:
+        </p>
+        <pre>
+123                            ==&gt; 123
++123                           ==&gt; 123
+-123                           ==&gt; -123
+123.                           ==&gt; 123
+2/3                            ==&gt; 2/3
+-2/3                           ==&gt; -2/3
+4/6                            ==&gt; 2/3
+6/3                            ==&gt; 2
+#b10101                        ==&gt; 21
+#b1010/1011                    ==&gt; 10/11
+#o777                          ==&gt; 511
+#xDADA                         ==&gt; 56026
+#36rABCDEFGHIJKLMNOPQRSTUVWXYZ ==&gt; 8337503854730415241050377135811259267835
+</pre>
+        <p>
+            You can also write floating-point numbers in a variety of ways. Unlike rational numbers, the syntax used to notate a floating-point number can affect the actual type of number read. Common Lisp defines four subtypes of floating-point number: short, single, double, and long. Each subtype can use a different number of bits in its representation, which means each subtype can represent values spanning a different range and with different precision. More bits gives a wider range and more precision.<sup>7</sup>
+        </p>
+        <p>
+            The basic format for floating-point numbers is an optional sign followed by a nonempty sequence of decimal digits possibly with an embedded decimal point. This sequence can be followed by an exponent marker for "computerized scientific notation."<sup>8</sup> The exponent marker consists of a single letter followed by an optional sign and a sequence of digits, which are interpreted as the power of ten by which the number before the exponent marker should be multiplied. The letter does double duty: it marks the beginning of the exponent and indicates what floating- point representation should be used for the number. The exponent markers <i>s</i>, <i>f</i>, <i>d</i>, <i>l</i> (and their uppercase equivalents) indicate short, single, double, and long floats, respectively. The letter <i>e</i> indicates that the default representation (initially single-float) should be used.
+        </p>
+        <p>
+            Numbers with no exponent marker are read in the default representation and must contain a decimal point followed by at least one digit to distinguish them from integers. The digits in a floating-point number are always treated as base 10 digits--the <code>#B</code>, <code>#X</code>, <code>#O</code>, and <code>#R</code> syntaxes work only with rationals. The following are some example floating-point numbers along with their canonical representation:
+        </p>
+        <pre>
+1.0      ==&gt; 1.0
+1e0      ==&gt; 1.0
+1d0      ==&gt; 1.0d0
+123.0    ==&gt; 123.0
+123e0    ==&gt; 123.0
+0.123    ==&gt; 0.123
+.123     ==&gt; 0.123
+123e-3   ==&gt; 0.123
+123E-3   ==&gt; 0.123
+0.123e20 ==&gt; 1.23e+19
+123d23   ==&gt; 1.23d+25
+</pre>
+        <p>
+            Finally, complex numbers are written in their own syntax, namely, <code>#C</code> or <code>#c</code> followed by a list of two real numbers representing the real and imaginary part of the complex number. There are actually five kinds of complex numbers because the real and imaginary parts must either both be rational or both be the same kind of floating-point number.
+        </p>
+        <p>
+            But you can write them however you want--if a complex is written with one rational and one floating-point part, the rational is converted to a float of the appropriate representation. Similarly, if the real and imaginary parts are both floats of different representations, the one in the smaller representation will be <i>upgraded</i>.
+        </p>
+        <p>
+            However, no complex numbers have a rational real component and a zero imaginary part--since such values are, mathematically speaking, rational, they're represented by the appropriate rational value. The same mathematical argument could be made for complex numbers with floating-point components, but for those complex types a number with a zero imaginary part is always a different object than the floating-point number representing the real component. Here are some examples of numbers written the complex number syntax:
+        </p>
+        <pre>
+#c(2      1)    ==&gt; #c(2 1)
+#c(2/3  3/4)    ==&gt; #c(2/3 3/4)
+#c(2    1.0)    ==&gt; #c(2.0 1.0)
+#c(2.0  1.0d0)  ==&gt; #c(2.0d0 1.0d0)
+#c(1/2  1.0)    ==&gt; #c(0.5 1.0)
+#c(3      0)    ==&gt; 3
+#c(3.0  0.0)    ==&gt; #c(3.0 0.0)
+#c(1/2    0)    ==&gt; 1/2
+#c(-6/3   0)    ==&gt; -2
+</pre>
+        <h2>
+            <a name="basic-math" id="basic-math">Basic Math</a>
+        </h2>
+        <p>
+            The basic arithmetic operations--addition, subtraction, multiplication, and division--are supported for all the different kinds of Lisp numbers with the functions <code><b>+</b></code>, <code><b>-</b></code>, <code><b>*</b></code>, and <code><b>/</b></code>. Calling any of these functions with more than two arguments is equivalent to calling the same function on the first two arguments and then calling it again on the resulting value and the rest of the arguments. For example, <code>(+ 1 2 3)</code> is equivalent to <code>(+ (+ 1 2) 3)</code>. With only one argument, <code><b>+</b></code> and <code><b>*</b></code> return the value; <code><b>-</b></code> returns its negation and <code><b>/</b></code> its reciprocal.<sup>9</sup>
+        </p>
+        <pre>
+(+ 1 2)              ==&gt; 3
+(+ 1 2 3)            ==&gt; 6
+(+ 10.0 3.0)         ==&gt; 13.0
+(+ #c(1 2) #c(3 4))  ==&gt; #c(4 6)
+(- 5 4)              ==&gt; 1
+(- 2)                ==&gt; -2
+(- 10 3 5)           ==&gt; 2
+(* 2 3)              ==&gt; 6
+(* 2 3 4)            ==&gt; 24
+(/ 10 5)             ==&gt; 2
+(/ 10 5 2)           ==&gt; 1
+(/ 2 3)              ==&gt; 2/3
+(/ 4)                ==&gt; 1/4
+</pre>
+        <p>
+            If all the arguments are the same type of number (rational, floating point, or complex), the result will be the same type except in the case where the result of an operation on complex numbers with rational components yields a number with a zero imaginary part, in which case the result will be a rational. However, floating-point and complex numbers are <i>contagious</i>--if all the arguments are reals but one or more are floating-point numbers, the other arguments are converted to the nearest floating-point value in a "largest" floating-point representation of the actual floating-point arguments. Floating-point numbers in a "smaller" representation are also converted to the larger representation. Similarly, if any of the arguments are complex, any real arguments are converted to the complex equivalents.
+        </p>
+        <pre>
+(+ 1 2.0)             ==&gt; 3.0
+(/ 2 3.0)             ==&gt; 0.6666667
+(+ #c(1 2) 3)         ==&gt; #c(4 2)
+(+ #c(1 2) 3/2)       ==&gt; #c(5/2 2)
+(+ #c(1 1) #c(2 -1))  ==&gt; 3
+</pre>
+        <p>
+            Because <code><b>/</b></code> doesn't truncate, Common Lisp provides four flavors of truncating and rounding for converting a real number (rational or floating point) to an integer: <code><b>FLOOR</b></code> truncates toward negative infinity, returning the largest integer less than or equal to the argument. <code><b>CEILING</b></code> truncates toward positive infinity, returning the smallest integer greater than or equal to the argument. <code><b>TRUNCATE</b></code> truncates toward zero, making it equivalent to <code><b>FLOOR</b></code> for positive arguments and to <code><b>CEILING</b></code> for negative arguments. And <code><b>ROUND</b></code> rounds to the nearest integer. If the argument is exactly halfway between two integers, it rounds to the nearest even integer.
+        </p>
+        <p>
+            Two related functions are <code><b>MOD</b></code> and <code><b>REM</b></code>, which return the modulus and remainder of a truncating division on real numbers. These two functions are related to the <code><b>FLOOR</b></code> and <code><b>TRUNCATE</b></code> functions as follows:
+        </p>
+        <pre>
+(+ (* (floor    (/ x y)) y) (mod x y)) === x
+(+ (* (truncate (/ x y)) y) (rem x y)) === x
+</pre>
+        <p>
+            Thus, for positive quotients they're equivalent, but for negative quotients they produce different results.<sup>10</sup>
+        </p>
+        <p>
+            The functions <code><b>1+</b></code> and <code><b>1-</b></code> provide a shorthand way to express adding and subtracting one from a number. Note that these are different from the macros <code><b>INCF</b></code> and <code><b>DECF</b></code>. <code><b>1+</b></code> and <code><b>1-</b></code> are just functions that return a new value, but <code><b>INCF</b></code> and <code><b>DECF</b></code> modify a place. The following equivalences show the relation between <code><b>INCF</b></code>/<code><b>DECF</b></code>, <code><b>1+</b></code>/<code><b>1-</b></code>, and <code><b>+</b></code>/<code><b>-</b></code>:
+        </p>
+        <pre>
+(incf x)    === (setf x (1+ x)) === (setf x (+ x 1))
+(decf x)    === (setf x (1- x)) === (setf x (- x 1))
+(incf x 10) === (setf x (+ x 10))
+(decf x 10) === (setf x (- x 10))
+</pre>
+        <h2>
+            <a name="numeric-comparisons" id="numeric-comparisons">Numeric Comparisons</a>
+        </h2>
+        <p>
+            The function <code><b>=</b></code> is the numeric equality predicate. It compares numbers by mathematical value, ignoring differences in type. Thus, <code><b>=</b></code> will consider mathematically equivalent values of different types equivalent while the generic equality predicate <code><b>EQL</b></code> would consider them inequivalent because of the difference in type. (The generic equality predicate <code><b>EQUALP</b></code>, however, uses <code><b>=</b></code> to compare numbers.) If it's called with more than two arguments, it returns true only if they all have the same value. Thus:
+        </p>
+        <pre>
+(= 1 1)                        ==&gt; T
+(= 10 20/2)                    ==&gt; T
+(= 1 1.0 #c(1.0 0.0) #c(1 0))  ==&gt; T
+</pre>
+        <p>
+            The <code><b>/=</b></code> function, conversely, returns true only if <i>all</i> its arguments are different values.
+        </p>
+        <pre>
+(/= 1 1)        ==&gt; NIL
+(/= 1 2)        ==&gt; T
+(/= 1 2 3)      ==&gt; T
+(/= 1 2 3 1)    ==&gt; NIL
+(/= 1 2 3 1.0)  ==&gt; NIL
+</pre>
+        <p>
+            The functions <code><b>&lt;</b></code>, <code><b>&gt;</b></code>, <code><b>&lt;=</b></code>, and <code><b>&gt;=</b></code> order rationals and floating-point numbers (in other words, the real numbers.) Like <code><b>=</b></code> and <code><b>/=</b></code>, these functions can be called with more than two arguments, in which case each argument is compared to the argument to its right.
+        </p>
+        <pre>
+(&lt; 2 3)       ==&gt; T
+(&gt; 2 3)       ==&gt; NIL
+(&gt; 3 2)       ==&gt; T
+(&lt; 2 3 4)     ==&gt; T
+(&lt; 2 3 3)     ==&gt; NIL
+(&lt;= 2 3 3)    ==&gt; T
+(&lt;= 2 3 3 4)  ==&gt; T
+(&lt;= 2 3 4 3)  ==&gt; NIL
+</pre>
+        <p>
+            To pick out the smallest or largest of several numbers, you can use the function <code><b>MIN</b></code> or <code><b>MAX</b></code>, which takes any number of real number arguments and returns the minimum or maximum value.
+        </p>
+        <pre>
+(max 10 11)    ==&gt; 11
+(min -12 -10)  ==&gt; -12
+(max -1 2 -3)  ==&gt; 2
+</pre>
+        <p>
+            Some other handy functions are <code><b>ZEROP</b></code>, <code><b>MINUSP</b></code>, and <code><b>PLUSP</b></code>, which test whether a single real number is equal to, less than, or greater than zero. Two other predicates, <code><b>EVENP</b></code> and <code><b>ODDP</b></code>, test whether a single integer argument is even or odd. The <i>P</i> suffix on the names of these functions is a standard naming convention for predicate functions, functions that test some condition and return a boolean.
+        </p>
+        <h2>
+            <a name="higher-math" id="higher-math">Higher Math</a>
+        </h2>
+        <p>
+            The functions you've seen so far are the beginning of the built-in mathematical functions. Lisp also supports logarithms: <code><b>LOG</b></code>; exponentiation: <code><b>EXP</b></code> and <code><b>EXPT</b></code>; the basic trigonometric functions: <code><b>SIN</b></code>, <code><b>COS</b></code>, and <code><b>TAN</b></code>; their inverses: <code><b>ASIN</b></code>, <code><b>ACOS</b></code>, and <code><b>ATAN</b></code>; hyperbolic functions: <code><b>SINH</b></code>, <code><b>COSH</b></code>, and <code><b>TANH</b></code>; and their inverses: <code><b>ASINH</b></code>, <code><b>ACOSH</b></code>, and <code><b>ATANH</b></code>. It also provides functions to get at the individual bits of an integer and to extract the parts of a ratio or a complex number. For a complete list, see any Common Lisp reference.
+        </p>
+        <h2>
+            <a name="characters" id="characters">Characters</a>
+        </h2>
+        <p>
+            Common Lisp characters are a distinct type of object from numbers. That's as it should be--characters are <i>not</i> numbers, and languages that treat them as if they are tend to run into problems when character encodings change, say, from 8-bit ASCII to 21-bit Unicode.<sup>11</sup> Because the Common Lisp standard didn't mandate a particular representation for characters, today several Lisp implementations use Unicode as their "native" character encoding despite Unicode being only a gleam in a standards body's eye at the time Common Lisp's own standardization was being wrapped up.
+        </p>
+        <p>
+            The read syntax for characters objects is simple: <code>#\</code> followed by the desired character. Thus, <code>#\x</code> is the character <code>x</code>. Any character can be used after the <code>#\</code>, including otherwise special characters such as <code>"</code>, <code>(</code>, and whitespace. However, writing whitespace characters this way isn't very (human) readable; an alternative syntax for certain characters is <code>#\</code> followed by the character's name. Exactly what names are supported depends on the character set and on the Lisp implementation, but all implementations support the names <i>Space</i> and <i>Newline</i>. Thus, you should write <code>#\Space</code> instead of <code>#\</code> , though the latter is technically legal. Other semistandard names (that implementations must use if the character set has the appropriate characters) are <i>Tab</i>, <i>Page</i>, <i>Rubout</i>, <i>Linefeed</i>, <i>Return</i>, and <i>Backspace</i>.
+        </p>
+        <h2>
+            <a name="character-comparisons" id="character-comparisons">Character Comparisons</a>
+        </h2>
+        <p>
+            The main thing you can do with characters, other than putting them into strings (which I'll get to later in this chapter), is to compare them with other characters. Since characters aren't numbers, you can't use the numeric comparison functions, such as <code><b>&lt;</b></code> and <code><b>&gt;</b></code>. Instead, two sets of functions provide character-specific analogs to the numeric comparators; one set is case-sensitive and the other case-insensitive.
+        </p>
+        <p>
+            The case-sensitive analog to the numeric <code><b>=</b></code> is the function <code><b>CHAR=</b></code>. Like <code><b>=</b></code>, <code><b>CHAR=</b></code> can take any number of arguments and returns true only if they're all the same character. The case- insensitive version is <code><b>CHAR-EQUAL</b></code>.
+        </p>
+        <p>
+            The rest of the character comparators follow this same naming scheme: the case-sensitive comparators are named by prepending the analogous numeric comparator with <code>CHAR</code>; the case-insensitive versions spell out the comparator name, separated from the <code>CHAR</code> with a hyphen. Note, however, that <code>&lt;=</code> and <code>&gt;=</code> are "spelled out" with the logical equivalents <code><b>NOT-GREATERP</b></code> and <code><b>NOT-LESSP</b></code> rather than the more verbose <code>LESSP-OR-EQUALP</code> and <code>GREATERP-OR-EQUALP</code>. Like their numeric counterparts, all these functions can take one or more arguments. Table 10-1 summarizes the relation between the numeric and character comparison functions.
+        </p>
+        <div class="table-caption">
+            Table 10-1. Character Comparison Functions
+        </div>
+        <table class="book-table">
+            <tr>
+                <td>
+                    <b>Numeric Analog</b>
+                </td>
+                <td>
+                    <b>Case-Sensitive</b>
+                </td>
+                <td>
+                    <b>Case-Insensitive</b>
+                </td>
+            </tr>
+            <tr>
+                <td>
+                    <code><b>=</b></code>
+                </td>
+                <td>
+                    <code><b>CHAR=</b></code>
+                </td>
+                <td>
+                    <code><b>CHAR-EQUAL</b></code>
+                </td>
+            </tr>
+            <tr>
+                <td>
+                    <code><b>/=</b></code>
+                </td>
+                <td>
+                    <code><b>CHAR/=</b></code>
+                </td>
+                <td>
+                    <code><b>CHAR-NOT-EQUAL</b></code>
+                </td>
+            </tr>
+            <tr>
+                <td>
+                    <code><b>&lt;</b></code>
+                </td>
+                <td>
+                    <code><b>CHAR&lt;</b></code>
+                </td>
+                <td>
+                    <code><b>CHAR-LESSP</b></code>
+                </td>
+            </tr>
+            <tr>
+                <td>
+                    <code><b>&gt;</b></code>
+                </td>
+                <td>
+                    <code><b>CHAR&gt;</b></code>
+                </td>
+                <td>
+                    <code><b>CHAR-GREATERP</b></code>
+                </td>
+            </tr>
+            <tr>
+                <td>
+                    <code><b>&lt;=</b></code>
+                </td>
+                <td>
+                    <code><b>CHAR&lt;=</b></code>
+                </td>
+                <td>
+                    <code><b>CHAR-NOT-GREATERP</b></code>
+                </td>
+            </tr>
+            <tr>
+                <td>
+                    <code><b>&gt;=</b></code>
+                </td>
+                <td>
+                    <code><b>CHAR&gt;=</b></code>
+                </td>
+                <td>
+                    <code><b>CHAR-NOT-LESSP</b></code>
+                </td>
+            </tr>
+        </table>
+        <p>
+            Other functions that deal with characters provide functions for, among other things, testing whether a given character is alphabetic or a digit character, testing the case of a character, obtaining a corresponding character in a different case, and translating between numeric values representing character codes and actual character objects. Again, for complete details, see your favorite Common Lisp reference.
+        </p>
+        <h2>
+            <a name="strings" id="strings">Strings</a>
+        </h2>
+        <p>
+            As mentioned earlier, strings in Common Lisp are really a composite data type, namely, a one-dimensional array of characters. Consequently, I'll cover many of the things you can do with strings in the next chapter when I discuss the many functions for manipulating sequences, of which strings are just one type. But strings also have their own literal syntax and a library of functions for performing string-specific operations. I'll discuss these aspects of strings in this chapter and leave the others for Chapter 11.
+        </p>
+        <p>
+            As you've seen, literal strings are written enclosed in double quotes. You can include any character supported by the character set in a literal string except double quote (<code>"</code>) and backslash (\). And you can include these two as well if you escape them with a backslash. In fact, backslash always escapes the next character, whatever it is, though this isn't necessary for any character except for <code>"</code> and itself. Table 10-2 shows how various literal strings will be read by the Lisp reader.
+        </p>
+        <div class="table-caption">
+            Table 10-2. Literal Strings
+        </div>
+        <table class="book-table">
+            <tr>
+                <td>
+                    <b>Literal</b>
+                </td>
+                <td>
+                    <b>Contents</b>
+                </td>
+                <td>
+                    <b>Comment</b>
+                </td>
+            </tr>
+            <tr>
+                <td>
+                    <code>"foobar"</code>
+                </td>
+                <td>
+                    foobar
+                </td>
+                <td>
+                    Plain string.
+                </td>
+            </tr>
+            <tr>
+                <td>
+                    <code>"foo\"bar"</code>
+                </td>
+                <td>
+                    foo"bar
+                </td>
+                <td>
+                    The backslash escapes quote.
+                </td>
+            </tr>
+            <tr>
+                <td>
+                    <code>"foo\\bar"</code>
+                </td>
+                <td>
+                    foo\bar
+                </td>
+                <td>
+                    The first backslash escapes second backslash.
+                </td>
+            </tr>
+            <tr>
+                <td>
+                    <code>"\"foobar\""</code>
+                </td>
+                <td>
+                    "foobar"
+                </td>
+                <td>
+                    The backslashes escape quotes.
+                </td>
+            </tr>
+            <tr>
+                <td>
+                    <code>"foo\bar"</code>
+                </td>
+                <td>
+                    foobar
+                </td>
+                <td>
+                    The backslash "escapes" <i>b</i>
+                </td>
+            </tr>
+        </table>
+        <p>
+            Note that the REPL will ordinarily print strings in readable form, adding the enclosing quotation marks and any necessary escaping backslashes, so if you want to see the actual contents of a string, you need to use function such as <code><b>FORMAT</b></code> designed to print human-readable output. For example, here's what you see if you type a string containing an embedded quotation mark at the REPL:
+        </p>
+        <pre>
+CL-USER&gt; "foo\"bar"
+"foo\"bar"
+</pre>
+        <p>
+            <code><b>FORMAT</b></code>, on the other hand, will show you the actual string contents:<sup>12</sup>
+        </p>
+        <pre>
+CL-USER&gt; (format t "foo\"bar")
+foo"bar
+NIL
+</pre>
+        <h2>
+            <a name="string-comparisons" id="string-comparisons">String Comparisons</a>
+        </h2>
+        <p>
+            You can compare strings using a set of functions that follow the same naming convention as the character comparison functions except with <code>STRING</code> as the prefix rather than <code>CHAR</code> (see Table 10-3).
+        </p>
+        <div class="table-caption">
+            Table 10-3. String Comparison Functions
+        </div>
+        <table class="book-table">
+            <tr>
+                <td>
+                    <b>Numeric Analog</b>
+                </td>
+                <td>
+                    <b>Case-Sensitive</b>
+                </td>
+                <td>
+                    <b>Case-Insensitive</b>
+                </td>
+            </tr>
+            <tr>
+                <td>
+                    <code><b>=</b></code>
+                </td>
+                <td>
+                    <code><b>STRING=</b></code>
+                </td>
+                <td>
+                    <code><b>STRING-EQUAL</b></code>
+                </td>
+            </tr>
+            <tr>
+                <td>
+                    <code><b>/=</b></code>
+                </td>
+                <td>
+                    <code><b>STRING/=</b></code>
+                </td>
+                <td>
+                    <code><b>STRING-NOT-EQUAL</b></code>
+                </td>
+            </tr>
+            <tr>
+                <td>
+                    <code><b>&lt;</b></code>
+                </td>
+                <td>
+                    <code><b>STRING&lt;</b></code>
+                </td>
+                <td>
+                    <code><b>STRING-LESSP</b></code>
+                </td>
+            </tr>
+            <tr>
+                <td>
+                    <code><b>&gt;</b></code>
+                </td>
+                <td>
+                    <code><b>STRING&gt;</b></code>
+                </td>
+                <td>
+                    <code><b>STRING-GREATERP</b></code>
+                </td>
+            </tr>
+            <tr>
+                <td>
+                    <code><b>&lt;=</b></code>
+                </td>
+                <td>
+                    <code><b>STRING&lt;=</b></code>
+                </td>
+                <td>
+                    <code><b>STRING-NOT-GREATERP</b></code>
+                </td>
+            </tr>
+            <tr>
+                <td>
+                    <code><b>&gt;=</b></code>
+                </td>
+                <td>
+                    <code><b>STRING&gt;=</b></code>
+                </td>
+                <td>
+                    <code><b>STRING-NOT-LESSP</b></code>
+                </td>
+            </tr>
+        </table>
+        <p>
+            However, unlike the character and number comparators, the string comparators can compare only two strings. That's because they also take keyword arguments that allow you to restrict the comparison to a substring of either or both strings. The arguments--<code>:start1</code>, <code>:end1</code>, <code>:start2</code>, and <code>:end2</code>--specify the starting (inclusive) and ending (exclusive) indices of substrings in the first and second string arguments. Thus, the following:
+        </p>
+        <pre>
+(string= "foobarbaz" "quuxbarfoo" :start1 3 :end1 6 :start2 4 :end2 7)
+</pre>
+        <p>
+            compares the substring "bar" in the two arguments and returns true. The <code>:end1</code> and <code>:end2</code> arguments can be <code><b>NIL</b></code> (or the keyword argument omitted altogether) to indicate that the corresponding substring extends to the end of the string.
+        </p>
+        <p>
+            The comparators that return true when their arguments differ--that is, all of them except <code><b>STRING=</b></code> and <code><b>STRING-EQUAL</b></code>--return the index in the first string where the mismatch was detected.
+        </p>
+        <pre>
+(string/= "lisp" "lissome") ==&gt; 3
+</pre>
+        <p>
+            If the first string is a prefix of the second, the return value will be the length of the first string, that is, one greater than the largest valid index into the string.
+        </p>
+        <pre>
+(string&lt; "lisp" "lisper") ==&gt; 4
+</pre>
+        <p>
+            When comparing substrings, the resulting value is still an index into the string as a whole. For instance, the following compares the substrings "bar" and "baz" but returns 5 because that's the index of the <i>r</i> in the first string:
+        </p>
+        <pre>
+(string&lt; "foobar" "abaz" :start1 3 :start2 1) ==&gt; 5   ; N.B. not 2
+</pre>
+        <p>
+            Other string functions allow you to convert the case of strings and trim characters from one or both ends of a string. And, as I mentioned previously, since strings are really a kind of sequence, all the sequence functions I'll discuss in the next chapter can be used with strings. For instance, you can discover the length of a string with the <code><b>LENGTH</b></code> function and can get and set individual characters of a string with the generic sequence element accessor function, <code><b>ELT</b></code>, or the generic array element accessor function, <code><b>AREF</b></code>. Or you can use the string-specific accessor, <code><b>CHAR</b></code>. But those functions, and others, are the topic of the next chapter, so let's move on.
+        </p>
+        <hr>
+        <div class="notes">
+            <p>
+                <sup>1</sup>Fred Brooks, <i>The Mythical Man-Month</i>, 20th Anniversary Edition (Boston: Addison-Wesley, 1995), p. 103. Emphasis in original.
+            </p>
+            <p>
+                <sup>2</sup>Mattel's Teen Talk Barbie
+            </p>
+            <p>
+                <sup>3</sup>Obviously, the size of a number that can be represented on a computer with finite memory is still limited in practice; furthermore, the actual representation of <i>bignums</i> used in a particular Common Lisp implementation may place other limits on the size of number that can be represented. But these limits are going to be well beyond "astronomically" large numbers. For instance, the number of atoms in the universe is estimated to be less than 2^269; current Common Lisp implementations can easily handle numbers up to and beyond 2^262144.
+            </p>
+            <p>
+                <sup>4</sup>Folks interested in using Common Lisp for intensive numeric computation should note that a naive comparison of the performance of numeric code in Common Lisp and languages such as C or FORTRAN will probably show Common Lisp to be much slower. This is because something as simple as <code>(+ a b)</code> in Common Lisp is doing a lot more than the seemingly equivalent <code>a + b</code> in one of those languages. Because of Lisp's dynamic typing and support for things such as arbitrary precision rationals and complex numbers, a seemingly simple addition is doing a lot more than an addition of two numbers that are known to be represented by machine words. However, you can use declarations to give Common Lisp information about the types of numbers you're using that will enable it to generate code that does only as much work as the code that would be generated by a C or FORTRAN compiler. Tuning numeric code for this kind of performance is beyond the scope of this book, but it's certainly possible.
+            </p>
+            <p>
+                <sup>5</sup>While the standard doesn't require it, many Common Lisp implementations support the IEEE standard for floating-point arithmetic, <i>IEEE Standard for Binary Floating-Point Arithmetic, ANSI/ IEEE Std 754-1985</i> (Institute of Electrical and Electronics Engineers, 1985).
+            </p>
+            <p>
+                <sup>6</sup>It's also possible to change the default base the reader uses for numbers without a specific radix marker by changing the value of the global variable <code><b>*READ-BASE*</b></code>. However, it's not clear that's the path to anything other than complete insanity.
+            </p>
+            <p>
+                <sup>7</sup>Since the purpose of floating-point numbers is to make efficient use of floating-point hardware, each Lisp implementation is allowed to map these four subtypes onto the native floating-point types as appropriate. If the hardware supports fewer than four distinct representations, one or more of the types may be equivalent.
+            </p>
+            <p>
+                <sup>8</sup>"Computerized scientific notation" is in scare quotes because, while commonly used in computer languages since the days of FORTRAN, it's actually quite different from real scientific notation. In particular, something like <code>1.0e4</code> means <code>10000.0</code>, but in true scientific notation that would be written as 1.0 x 10^4. And to further confuse matters, in true scientific notation the letter <i>e</i> stands for the base of the natural logarithm, so something like 1.0 x <i>e</i>^4, while superficially similar to <code>1.0e4</code>, is a completely different value, approximately 54.6.
+            </p>
+            <p>
+                <sup>9</sup>For mathematical consistency, <code><b>+</b></code> and <code><b>*</b></code> can also be called with no arguments, in which case they return the appropriate identity: 0 for <code><b>+</b></code> and 1 for <code><b>*</b></code>.
+            </p>
+            <p>
+                <sup>10</sup>Roughly speaking, <code><b>MOD</b></code> is equivalent to the <code>%</code> operator in Perl and Python, and <code><b>REM</b></code> is equivalent to the % in C and Java. (Technically, the exact behavior of % in C wasn't specified until the C99 standard.)
+            </p>
+            <p>
+                <sup>11</sup>Even Java, which was designed from the beginning to use Unicode characters on the theory that Unicode was the going to be <i>the</i> character encoding of the future, has run into trouble since Java characters are defined to be a 16-bit quantity and the Unicode 3.1 standard extended the range of the Unicode character set to require a 21-bit representation. Ooops.
+            </p>
+            <p>
+                <sup>12</sup>Note, however, that not all literal strings can be printed by passing them as the second argument to <code><b>FORMAT</b></code> since certain sequences of characters have a special meaning to <code><b>FORMAT</b></code>. To safely print an arbitrary string--say, the value of a variable s--with <code><b>FORMAT</b></code> you should write (format t "~a" s).
+            </p>
+        </div>
+        <div class="copyright">
+            Copyright © 2003-2005, Peter Seibel
+        </div>
+    </body>
+</html>

@@ -1,0 +1,472 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.01//EN">
+<html>
+    <head>
+        <title>
+            Programming in the Large: Packages and Symbols
+        </title>
+        <link rel="stylesheet" type="text/css" href="style.css">
+    </head>
+    <body>
+        <h1>
+            21. Programming in the Large: Packages and Symbols
+        </h1>
+        <p>
+            In Chapter 4 I discussed how the Lisp reader translates textual names into objects to be passed to the evaluator, representing them with a kind of object called a <i>symbol</i>. It turns out that having a built-in data type specifically for representing names is quite handy for a lot of kinds of programming.<sup>1</sup> That, however, isn't the topic of this chapter. In this chapter I'll discuss one of the more immediate and practical aspects of dealing with names: how to avoid name conflicts between independently developed pieces of code.
+        </p>
+        <p>
+            Suppose, for instance, you're writing a program and decide to use a third-party library. You don't want to have to know the name of every function, variable, class, or macro used in the internals of that library in order to avoid conflicts between those names and the names you use in your program. You'd like for most of the names in the library and the names in your program to be considered distinct even if they happen to have the same textual representation. At the same time, you'd like certain names defined in the library to be readily accessible--the names that make up its public API, which you'll want to use in your program.
+        </p>
+        <p>
+            In Common Lisp, this namespace problem boils down to a question of controlling how the reader translates textual names into symbols: if you want two occurrences of the same name to be considered the same by the evaluator, you need to make sure the reader uses the same symbol to represent each name. Conversely, if you want two names to be considered distinct, even if they happen to have the same textual name, you need the reader to create different symbols to represent each name.
+        </p>
+        <h2>
+            <a name="how-the-reader-uses-packages" id="how-the-reader-uses-packages">How the Reader Uses Packages</a>
+        </h2>
+        <p>
+            In Chapter 4 I discussed briefly how the Lisp reader translates names into symbols, but I glossed over most of the details--now it's time to take a closer look at what actually happens.
+        </p>
+        <p>
+            I'll start by describing the syntax of names understood by the reader and how that syntax relates to packages. For the moment you can think of a package as a table that maps strings to symbols. As you'll see in the next section, the actual mapping is slightly more flexible than a simple lookup table but not in ways that matter much to the reader. Each package also has a name, which can be used to find the package using the function <code><b>FIND-PACKAGE</b></code>.
+        </p>
+        <p>
+            The two key functions that the reader uses to access the name-to-symbol mappings in a package are <code><b>FIND-SYMBOL</b></code> and <code><b>INTERN</b></code>. Both these functions take a string and, optionally, a package. If not supplied, the package argument defaults to the value of the global variable <code><b>*PACKAGE*</b></code>, also called the <i>current package</i>.
+        </p>
+        <p>
+            <code><b>FIND-SYMBOL</b></code> looks in the package for a symbol with the given string for a name and returns it, or <code><b>NIL</b></code> if no symbol is found. <code><b>INTERN</b></code> also will return an existing symbol; otherwise it creates a new symbol with the string as its name and adds it to the package.
+        </p>
+        <p>
+            Most names you use are <i>unqualified</i>, names that contain no colons. When the reader reads such a name, it translates it to a symbol by converting any unescaped letters to uppercase and passing the resulting string to <code><b>INTERN</b></code>. Thus, each time the reader reads the same name in the same package, it'll get the same symbol object. This is important because the evaluator uses the object identity of symbols to determine which function, variable, or other program element a given symbol refers to. Thus, the reason an expression such as <code>(hello-world)</code> results in calling a particular <code>hello-world</code> function is because the reader returns the same symbol when it reads the function call as it did when it read the <code><b>DEFUN</b></code> form that defined the function.
+        </p>
+        <p>
+            A name containing either a single colon or a double colon is a package-qualified name. When the reader reads a package-qualified name, it splits the name on the colon(s) and uses the first part as the name of a package and the second part as the name of the symbol. The reader looks up the appropriate package and uses it to translate the symbol name to a symbol object.
+        </p>
+        <p>
+            A name containing only a single colon must refer to an <i>external</i> symbol--one the package <i>exports</i> for public use. If the named package doesn't contain a symbol with a given name, or if it does but it hasn't been exported, the reader signals an error. A double-colon name can refer to any symbol from the named package, though it's usually a bad idea--the set of exported symbols defines a package's public interface, and if you don't respect the package author's decision about what names to make public and which ones to keep private, you're asking for trouble down the road. On the other hand, sometimes a package author will neglect to export a symbol that really ought to be public. In that case, a double-colon name lets you get work done without having to wait for the next version of the package to be released.
+        </p>
+        <p>
+            Two other bits of symbol syntax the reader understands are those for keyword symbols and uninterned symbols. Keyword symbols are written with names starting with a colon. Such symbols are interned in the package named <code><b>KEYWORD</b></code> and automatically exported. Additionally, when the reader interns a symbol in the <code><b>KEYWORD</b></code>, it also defines a constant variable with the symbol as both its name and value. This is why you can use keywords in argument lists without quoting them--when they appear in a value position, they evaluate to themselves. Thus:
+        </p>
+        <pre>
+(eql ':foo :foo) ==&gt; T
+</pre>
+        <p>
+            The names of keyword symbols, like all symbols, are converted to all uppercase by the reader before they're interned. The name doesn't include the leading colon.
+        </p>
+        <pre>
+(symbol-name :foo) ==&gt; "FOO"
+</pre>
+        <p>
+            Uninterned symbols are written with a leading <code>#:</code>. These names (minus the <code>#:</code>) are converted to uppercase as normal and then translated into symbols, but the symbols aren't interned in any package; each time the reader reads a <code>#:</code> name, it creates a new symbol. Thus:
+        </p>
+        <pre>
+(eql '#:foo '#:foo) ==&gt; NIL
+</pre>
+        <p>
+            You'll rarely, if ever, write this syntax yourself, but will sometimes see it when you print an s-expression containing symbols returned by the function <code><b>GENSYM</b></code>.
+        </p>
+        <pre>
+(gensym) ==&gt; #:G3128
+</pre>
+        <h2>
+            <a name="a-bit-of-package-and-symbol-vocabulary" id="a-bit-of-package-and-symbol-vocabulary">A Bit of Package and Symbol Vocabulary</a>
+        </h2>
+        <p>
+            As I mentioned previously, the mapping from names to symbols implemented by a package is slightly more flexible than a simple lookup table. At its core, every package contains a name-to-symbol lookup table, but a symbol can be made accessible via an unqualified name in a given package in other ways. To talk sensibly about these other mechanisms, you'll need a little bit of vocabulary.
+        </p>
+        <p>
+            To start with, all the symbols that can be found in a given package using <code><b>FIND-SYMBOL</b></code> are said to be <i>accessible</i> in that package. In other words, the accessible symbols in a package are those that can be referred to with unqualified names when the package is current.
+        </p>
+        <p>
+            A symbol can be accessible in two ways. The first is for the package's name-to-symbol table to contain an entry for the symbol, in which case the symbol is said to be <i>present</i> in the package. When the reader interns a new symbol in a package, it's added to the package's name-to-symbol table. The package in which a symbol is first interned is called the symbol's <i>home package</i>.
+        </p>
+        <p>
+            The other way a symbol can be accessible in a package is if the package <i>inherits</i> it. A package inherits symbols from other packages by <i>using</i> the other packages. Only <i>external</i> symbols in the used packages are inherited. A symbol is made external in a package by <i>exporting</i> it. In addition to causing it to be inherited by using packages, exporting a symbol also--as you saw in the previous section--makes it possible to refer to the symbol using a single-colon qualified name.
+        </p>
+        <p>
+            To keep the mappings from names to symbols deterministic, the package system allows only one symbol to be accessible in a given package for each name. That is, a package can't have a present symbol and an inherited symbol with the same name or inherit two different symbols, from different packages, with the same name. However, you can resolve conflicts by making one of the accessible symbols a <i>shadowing</i> symbol, which makes the other symbols of the same name inaccessible. In addition to its name-to-symbol table, each package maintains a list of shadowing symbols.
+        </p>
+        <p>
+            An existing symbol can be <i>imported</i> into another package by adding it to the package's name-to-symbol table. Thus, the same symbol can be present in multiple packages. Sometimes you'll import symbols simply because you want them to be accessible in the importing package without using their home package. Other times you'll import a symbol because only present symbols can be exported or be shadowing symbols. For instance, if a package needs to use two packages that have external symbols of the same name, one of the symbols must be imported into the using package in order to be added to its shadowing list and make the other symbol inaccessible.
+        </p>
+        <p>
+            Finally, a present symbol can be <i>uninterned</i> from a package, which causes it to be removed from the name-to-symbol table and, if it's a shadowing symbol, from the shadowing list. You might unintern a symbol from a package to resolve a conflict between the symbol and an external symbol from a package you want to use. A symbol that isn't present in any package is called an <i>uninterned</i> symbol, can no longer be read by the reader, and will be printed using the <code>#:foo</code> syntax.
+        </p>
+        <h2>
+            <a name="three-standard-packages" id="three-standard-packages">Three Standard Packages</a>
+        </h2>
+        <p>
+            In the next section I'll show you how to define your own packages, including how to make one package use another and how to export, shadow, and import symbols. But first let's look at a few packages you've been using already. When you first start Lisp, the value of <code><b>*PACKAGE*</b></code> is typically the <code>COMMON-LISP-USER</code> package, also known as <code>CL-USER</code>.<sup>2</sup> <code>CL-USER</code> uses the package <code>COMMON-LISP</code>, which exports all the names defined by the language standard. Thus, when you type an expression at the REPL, all the names of standard functions, macros, variables, and so on, will be translated to the symbols exported from <code>COMMON-LISP</code>, and all other names will be interned in the <code>COMMON-LISP-USER</code> package. For example, the name <code><b>*PACKAGE*</b></code> is exported from <code>COMMON-LISP</code>--if you want to see the value of <code><b>*PACKAGE*</b></code>, you can type this:
+        </p>
+        <pre>
+CL-USER&gt; *package*
+#&lt;The COMMON-LISP-USER package&gt;
+</pre>
+        <p>
+            because <code>COMMON-LISP-USER</code> uses <code>COMMON-LISP</code>. Or you can use a package-qualified name.
+        </p>
+        <pre>
+CL-USER&gt; common-lisp:*package*
+#&lt;The COMMON-LISP-USER package&gt;
+</pre>
+        <p>
+            You can even use <code>COMMON-LISP</code>'s nickname, <code>CL</code>.
+        </p>
+        <pre>
+CL-USER&gt; cl:*package*
+#&lt;The COMMON-LISP-USER package&gt;
+</pre>
+        <p>
+            But <code>*X*</code> isn't a symbol in <code>COMMON-LISP</code>, so you if type this:
+        </p>
+        <pre>
+CL-USER&gt; (defvar *x* 10)
+*X*
+</pre>
+        <p>
+            the reader reads <code><b>DEFVAR</b></code> as the symbol from the <code>COMMON-LISP</code> package and <code>*X*</code> as a symbol in <code>COMMON-LISP-USER</code>.
+        </p>
+        <p>
+            The REPL can't start in the <code>COMMON-LISP</code> package because you're not allowed to intern new symbols in it; <code>COMMON-LISP-USER</code> serves as a "scratch" package where you can create your own names while still having easy access to all the symbols in <code>COMMON-LISP</code>.<sup>3</sup> Typically, all packages you'll define will also use <code>COMMON-LISP</code>, so you don't have to write things like this:
+        </p>
+        <pre>
+(cl:defun (x) (cl:+ x 2))
+</pre>
+        <p>
+            The third standard package is the <code><b>KEYWORD</b></code> package, the package the Lisp reader uses to intern names starting with colon. Thus, you can also refer to any keyword symbol with an explicit package qualification of <code>keyword</code> like this:
+        </p>
+        <pre>
+CL-USER&gt; :a
+:A
+CL-USER&gt; keyword:a
+:A
+CL-USER&gt; (eql :a keyword:a)
+T
+</pre>
+        <h2>
+            <a name="defining-your-own-packages" id="defining-your-own-packages">Defining Your Own Packages</a>
+        </h2>
+        <p>
+            Working in <code>COMMON-LISP-USER</code> is fine for experiments at the REPL, but once you start writing actual programs you'll want to define new packages so different programs loaded into the same Lisp environment don't stomp on each other's names. And when you write libraries that you intend to use in different contexts, you'll want to define separate packages and then export the symbols that make up the libraries' public APIs.
+        </p>
+        <p>
+            However, before you start defining packages, it's important to understand one thing about what packages do <i>not</i> do. Packages don't provide direct control over who can call what function or access what variable. They provide you with basic control over namespaces by controlling how the reader translates textual names into symbol objects, but it isn't until later, in the evaluator, that the symbol is interpreted as the name of a function or variable or whatever else. Thus, it doesn't make sense to talk about exporting a function or a variable from a package. You can export symbols to make certain names easier to refer to, but the package system doesn't allow you to restrict how those names are used.<sup>4</sup>
+        </p>
+        <p>
+            With that in mind, you can start looking at how to define packages and tie them together. You define new packages with the macro <code><b>DEFPACKAGE</b></code>, which allows you to not only create the package but to specify what packages it uses, what symbols it exports, and what symbols it imports from other packages and to resolve conflicts by creating shadowing symbols.<sup>5</sup>
+        </p>
+        <p>
+            I'll describe the various options in terms of how you might use packages while writing a program that organizes e-mail messages into a searchable database. The program is purely hypothetical, as are the libraries I'll refer to--the point is to look at how the packages used in such a program might be structured.
+        </p>
+        <p>
+            The first package you'd need is one to provide a namespace for the application--you want to be able to name your functions, variables, and so on, without having to worry about name collisions with unrelated code. So you'd define a new package with <code><b>DEFPACKAGE</b></code>.
+        </p>
+        <p>
+            If the application is simple enough to be written with no libraries beyond the facilities provided by the language itself, you could define a simple package like this:
+        </p>
+        <pre>
+(defpackage :com.gigamonkeys.email-db
+  (:use :common-lisp))
+</pre>
+        <p>
+            This defines a package, named <code>COM.GIGAMONKEYS.EMAIL-DB</code>, that inherits all the symbols exported by the <code>COMMON-LISP</code> package.<sup>6</sup>
+        </p>
+        <p>
+            You actually have several choices of how to represent the names of packages and, as you'll see, the names of symbols in a <code><b>DEFPACKAGE</b></code>. Packages and symbols are named with strings. However, in a <code><b>DEFPACKAGE</b></code> form, you can specify the names of packages and symbols with <i>string designators</i>. A string designator is either a string, which designates itself; a symbol, which designates its name; or a character, which designates a one-character string containing just the character. Using keyword symbols, as in the previous <code><b>DEFPACKAGE</b></code>, is a common style that allows you to write the names in lowercase--the reader will convert the names to uppercase for you. You could also write the <code><b>DEFPACKAGE</b></code> with strings, but then you have to write them in all uppercase, because the true names of most symbols and packages are in fact uppercase because of the case conversion performed by the reader.<sup>7</sup>
+        </p>
+        <pre>
+(defpackage "COM.GIGAMONKEYS.EMAIL-DB"
+  (:use "COMMON-LISP"))
+</pre>
+        <p>
+            You could also use nonkeyword symbols--the names in <code><b>DEFPACKAGE</b></code> aren't evaluated--but then the very act of reading the <code><b>DEFPACKAGE</b></code> form would cause those symbols to be interned in the current package, which at the very least will pollute that namespace and may also cause problems later if you try to use the package.<sup>8</sup>
+        </p>
+        <p>
+            To read code in this package, you need to make it the current package with the <code><b>IN-PACKAGE</b></code> macro:
+        </p>
+        <pre>
+(in-package :com.gigamonkeys.email-db)
+</pre>
+        <p>
+            If you type this expression at the REPL, it will change the value of <code><b>*PACKAGE*</b></code>, affecting how the REPL reads subsequent expressions, until you change it with another call to <code><b>IN-PACKAGE</b></code>. Similarly, if you include an <code><b>IN-PACKAGE</b></code> in a file that's loaded with <code><b>LOAD</b></code> or compiled with <code><b>COMPILE-FILE</b></code>, it will change the package, affecting the way subsequent expressions in the file are read.<sup>9</sup>
+        </p>
+        <p>
+            With the current package set to the <code>COM.GIGAMONKEYS.EMAIL-DB</code> package, other than names inherited from the <code>COMMON-LISP</code> package, you can use any name you want for whatever purpose you want. Thus, you could define a new <code>hello-world</code> function that could coexist with the <code>hello-world</code> function previously defined in <code>COMMON-LISP-USER</code>. Here's the behavior of the existing function:
+        </p>
+        <pre>
+CL-USER&gt; (hello-world)
+hello, world
+NIL
+</pre>
+        <p>
+            Now you can switch to the new package using <code><b>IN-PACKAGE</b></code>.<sup>10</sup> Notice how the prompt changes--the exact form is determined by the development environment, but in SLIME the default prompt consists of an abbreviated version of the package name.
+        </p>
+        <pre>
+CL-USER&gt; (in-package :com.gigamonkeys.email-db)
+#&lt;The COM.GIGAMONKEYS.EMAIL-DB package&gt;
+EMAIL-DB&gt; 
+</pre>
+        <p>
+            You can define a new <code>hello-world</code> in this package:
+        </p>
+        <pre>
+EMAIL-DB&gt; (defun hello-world () (format t "hello from EMAIL-DB package~%"))
+HELLO-WORLD
+</pre>
+        <p>
+            And test it, like this:
+        </p>
+        <pre>
+EMAIL-DB&gt; (hello-world)
+hello from EMAIL-DB package
+NIL
+</pre>
+        <p>
+            Now switch back to <code>CL-USER</code>.
+        </p>
+        <pre>
+EMAIL-DB&gt; (in-package :cl-user)
+#&lt;The COMMON-LISP-USER package&gt;
+CL-USER&gt; 
+</pre>
+        <p>
+            And the old function is undisturbed.
+        </p>
+        <pre>
+CL-USER&gt; (hello-world)
+hello, world
+NIL
+</pre>
+        <h2>
+            <a name="packaging-reusable-libraries" id="packaging-reusable-libraries">Packaging Reusable Libraries</a>
+        </h2>
+        <p>
+            While working on the e-mail database, you might write several functions related to storing and retrieving text that don't have anything in particular to do with e-mail. You might realize that those functions could be useful in other programs and decide to repackage them as a library. You should define a new package, but this time you'll export certain names to make them available to other packages.
+        </p>
+        <pre>
+(defpackage :com.gigamonkeys.text-db
+  (:use :common-lisp)
+  (:export :open-db   
+           :save
+           :store))
+</pre>
+        <p>
+            Again, you use the <code>COMMON-LISP</code> package, because you'll need access to standard functions within <code>COM.GIGAMONKEYS.TEXT-DB</code>. The <code>:export</code> clause specifies names that will be external in <code>COM.GIGAMONKEYS.TEXT-DB</code> and thus accessible in packages that <code>:use</code> it. Therefore, after you've defined this package, you can change the definition of the main application package to the following:
+        </p>
+        <pre>
+(defpackage :com.gigamonkeys.email-db
+  (:use :common-lisp :com.gigamonkeys.text-db))
+</pre>
+        <p>
+            Now code written in <code>COM.GIGAMONKEYS.EMAIL-DB</code> can use unqualified names to refer to the exported symbols from both <code>COMMON-LISP</code> and <code>COM.GIGAMONKEYS.TEXT-DB</code>. All other names will continue to be interned directly in the <code>COM.GIGAMONKEYS.EMAIL-DB</code> package.
+        </p>
+        <h2>
+            <a name="importing-individual-names" id="importing-individual-names">Importing Individual Names</a>
+        </h2>
+        <p>
+            Now suppose you find a third-party library of functions for manipulating e-mail messages. The names used in the library's API are exported from the package <code>COM.ACME.EMAIL</code>, so you could <code>:use</code> that package to get easy access to those names. But suppose you need to use only one function from this library, and other exported symbols conflict with names you already use (or plan to use) in our own code.<sup>11</sup> In this case, you can import the one symbol you need with an <code>:import-from</code> clause in the <code><b>DEFPACKAGE</b></code>. For instance, if the name of the function you want to use is <code>parse-email-address</code>, you can change the <code><b>DEFPACKAGE</b></code> to this:
+        </p>
+        <pre>
+(defpackage :com.gigamonkeys.email-db
+  (:use :common-lisp :com.gigamonkeys.text-db)
+  (:import-from :com.acme.email :parse-email-address))
+</pre>
+        <p>
+            Now anywhere the name <code>parse-email-address</code> appears in code read in the <code>COM.GIGAMONKEYS.EMAIL-DB</code> package, it will be read as the symbol from <code>COM.ACME.EMAIL</code>. If you need to import more than one symbol from a single package, you can include multiple names after the package name in a single <code>:import-from</code> clause. A <code><b>DEFPACKAGE</b></code> can also include multiple <code>:import-from</code> clauses in order to import symbols from different packages.
+        </p>
+        <p>
+            Occasionally you'll run into the opposite situation--a package may export a bunch of names you want to use and a few you don't. Rather than listing all the symbols you <i>do</i> want to use in an <code>:import-from</code> clause, you can instead <code>:use</code> the package and then list the names you <i>don't</i> want to inherit in a <code>:shadow</code> clause. For instance, suppose the <code>COM.ACME.TEXT</code> package exports a bunch of names of functions and classes used in text processing. Further suppose that most of these functions and classes are ones you'll want to use in your code, but one of the names, <code>build-index</code>, conflicts with a name you've already used. You can make the <code>build-index</code> from <code>COM.ACME.TEXT</code> inaccessible by shadowing it.
+        </p>
+        <pre>
+(defpackage :com.gigamonkeys.email-db
+  (:use
+   :common-lisp
+   :com.gigamonkeys.text-db
+   :com.acme.text)
+  (:import-from :com.acme.email :parse-email-address)
+  (:shadow :build-index))
+</pre>
+        <p>
+            The <code>:shadow</code> clause causes a new symbol named <code>BUILD-INDEX</code> to be created and added directly to <code>COM.GIGAMONKEYS.EMAIL-DB</code>'s name-to-symbol map. Now if the reader reads the name <code>BUILD-INDEX</code>, it will translate it to the symbol in <code>COM.GIGAMONKEYS.EMAIL-DB</code>'s map, rather than the one that would otherwise be inherited from <code>COM.ACME.TEXT</code>. The new symbol is also added to a <i>shadowing symbols list</i> that's part of the <code>COM.GIGAMONKEYS.EMAIL-DB</code> package, so if you later use another package that also exports a <code>BUILD-INDEX</code> symbol, the package system will know there's no conflict--that you want the symbol from <code>COM.GIGAMONKEYS.EMAIL-DB</code> to be used rather than any other symbols with the same name inherited from other packages.
+        </p>
+        <p>
+            A similar situation can arise if you want to use two packages that export the same name. In this case the reader won't know which inherited name to use when it reads the textual name. In such situations you must resolve the ambiguity by shadowing the conflicting names. If you don't need to use the name from either package, you could shadow the name with a <code>:shadow</code> clause, creating a new symbol with the same name in your package. But if you actually want to use one of the inherited symbols, then you need to resolve the ambiguity with a <code>:shadowing-import-from</code> clause. Like an <code>:import-from</code> clause, a <code>:shadowing-import-from</code> clause consists of a package name followed by the names to import from that package. For instance, if <code>COM.ACME.TEXT</code> exports a name <code>SAVE</code> that conflicts with the name exported from <code>COM.GIGAMONKEYS.TEXT-DB</code>, you could resolve the ambiguity with the following <code><b>DEFPACKAGE</b></code>:
+        </p>
+        <pre>
+(defpackage :com.gigamonkeys.email-db
+  (:use
+   :common-lisp
+   :com.gigamonkeys.text-db
+   :com.acme.text)
+  (:import-from :com.acme.email :parse-email-address)
+  (:shadow :build-index)
+  (:shadowing-import-from :com.gigamonkeys.text-db :save))
+</pre>
+        <h2>
+            <a name="packaging-mechanics" id="packaging-mechanics">Packaging Mechanics</a>
+        </h2>
+        <p>
+            That covers the basics of how to use packages to manage namespaces in several common situations. However, another level of how to use packages is worth discussing--the raw mechanics of how to organize code that uses different packages. In this section I'll discuss a few rules of thumb about how to organize code--where to put your <code><b>DEFPACKAGE</b></code> forms relative to the code that uses your packages via <code><b>IN-PACKAGE</b></code>.
+        </p>
+        <p>
+            Because packages are used by the reader, a package must be defined before you can <code><b>LOAD</b></code> or <code><b>COMPILE-FILE</b></code> a file that contains an <code><b>IN-PACKAGE</b></code> expression switching to that package. Packages also must be defined before other <code><b>DEFPACKAGE</b></code> forms can refer to them. For instance, if you're going to <code>:use</code> <code>COM.GIGAMONKEYS.TEXT-DB</code> in <code>COM.GIGAMONKEYS.EMAIL-DB</code>, then <code>COM.GIGAMONKEYS.TEXT-DB</code>'s <code><b>DEFPACKAGE</b></code> must be evaluated before the <code><b>DEFPACKAGE</b></code> of <code>COM.GIGAMONKEYS.EMAIL-DB</code>.
+        </p>
+        <p>
+            The best first step toward making sure packages exist when they need to is to put all your <code><b>DEFPACKAGE</b></code>s in files separate from the code that needs to be read in those packages. Some folks like to create a <code>foo-package.lisp</code> file for each individual package, and others create a single <code>packages.lisp</code> that contains all the <code><b>DEFPACKAGE</b></code> forms for a group of related packages. Either approach is reasonable, though the one-file-per-package approach also requires that you arrange to load the individual files in the right order according to the interpackage dependencies.
+        </p>
+        <p>
+            Either way, once all the <code><b>DEFPACKAGE</b></code> forms have been separated from the code that will be read in the packages they define, you can arrange to <code><b>LOAD</b></code> the files containing the <code><b>DEFPACKAGE</b></code>s before you compile or load any of the other files. For simple programs you can do this by hand: simply <code><b>LOAD</b></code> the file or files containing the <code><b>DEFPACKAGE</b></code> forms, possibly compiling them with <code><b>COMPILE-FILE</b></code> first. Then <code><b>LOAD</b></code> the files that use those packages, again optionally compiling them first with <code><b>COMPILE-FILE</b></code>. Note, however, that the packages don't exist until you <code><b>LOAD</b></code> the package definitions, either the source or the files produced by <code><b>COMPILE-FILE</b></code>. Thus, if you're compiling everything, you must still <code><b>LOAD</b></code> all the package definitions before you can <code><b>COMPILE-FILE</b></code> any files to be read in the packages.
+        </p>
+        <p>
+            Doing these steps by hand will get tedious after a while. For simple programs you can automate the steps by writing a file, <code>load.lisp</code>, that contains the appropriate <code><b>LOAD</b></code> and <code><b>COMPILE-FILE</b></code> calls in the right order. Then you can just <code><b>LOAD</b></code> that file. For more complex programs you'll want to use a <i>system definition</i> facility to manage loading and compiling files in the right order.<sup>12</sup>
+        </p>
+        <p>
+            The other key rule of thumb is that each file should contain exactly one <code><b>IN-PACKAGE</b></code> form, and it should be the first form in the file other than comments. Files containing <code><b>DEFPACKAGE</b></code> forms should start with <code>(in-package "COMMON-LISP-USER")</code>, and all other files should contain an <code><b>IN-PACKAGE</b></code> of one of your packages.
+        </p>
+        <p>
+            If you violate this rule and switch packages in the middle of a file, you'll confuse human readers who don't notice the second <code><b>IN-PACKAGE</b></code>. Also, many Lisp development environments, particularly Emacs-based ones such as SLIME, look for an <code><b>IN-PACKAGE</b></code> to determine the package they should use when communicating with Common Lisp. Multiple <code><b>IN-PACKAGE</b></code> forms per file may confuse these tools as well.
+        </p>
+        <p>
+            On the other hand, it's fine to have multiple files read in the same package, each with an identical <code><b>IN-PACKAGE</b></code> form. It's just a matter of how you like to organize your code.
+        </p>
+        <p>
+            The other bit of packaging mechanics has to do with how to name packages. Package names live in a flat namespace--package names are just strings, and different packages must have textually distinct names. Thus, you have to consider the possibility of conflicts between package names. If you're using only packages you developed yourself, then you can probably get away with using short names for your packages. But if you're planning to use third-party libraries or to publish your code for use by other programmers, then you need to follow a naming convention that will minimize the possibility of name collisions between different packages. Many Lispers these days are adopting Java-style names, like the ones used in this chapter, consisting of a reversed Internet domain name followed by a dot and a descriptive string.
+        </p>
+        <h2>
+            <a name="package-gotchas" id="package-gotchas">Package Gotchas</a>
+        </h2>
+        <p>
+            Once you're familiar with packages, you won't spend a bunch of time thinking about them. There's just not that much to them. However, a couple of gotchas that bite most new Lisp programmers make the package system seem more complicated and unfriendly than it really is.
+        </p>
+        <p>
+            The number-one gotcha arises most commonly when playing around at the REPL. You'll be looking at some library that defines certain interesting functions. You'll try to call one of the functions like this:
+        </p>
+        <pre>
+CL-USER&gt; (foo)
+</pre>
+        <p>
+            and get dropped into the debugger with this error:
+        </p>
+        <pre>
+attempt to call `FOO' which is an undefined function.
+   [Condition of type UNDEFINED-FUNCTION]
+
+Restarts:
+  0: [TRY-AGAIN] Try calling FOO again.
+  1: [RETURN-VALUE] Return a value instead of calling FOO.
+  2: [USE-VALUE] Try calling a function other than FOO.
+  3: [STORE-VALUE] Setf the symbol-function of FOO and call it again.
+  4: [ABORT] Abort handling SLIME request.
+  5: [ABORT] Abort entirely from this (lisp) process.
+</pre>
+        <p>
+            Ah, of course--you forgot to use the library's package. So you quit the debugger and try to <code><b>USE-PACKAGE</b></code> the library's package in order to get access to the name <code>FOO</code> so you can call the function.
+        </p>
+        <pre>
+CL-USER&gt; (use-package :foolib)
+</pre>
+        <p>
+            But that drops you back into the debugger with this error message:
+        </p>
+        <pre>
+Using package `FOOLIB' results in name conflicts for these symbols: FOO
+   [Condition of type PACKAGE-ERROR]
+
+Restarts:
+  0: [CONTINUE] Unintern the conflicting symbols from the `COMMON-LISP-USER' package.
+  1: [ABORT] Abort handling SLIME request.
+  2: [ABORT] Abort entirely from this (lisp) process.
+</pre>
+        <p>
+            Huh? The problem is the first time you called <code>foo</code>, the reader read the name <code>foo</code> and interned it in <code>CL-USER</code> before the evaluator got hold of it and discovered that this newly interned symbol isn't the name of a function. This new symbol then conflicts with the symbol of the same name exported from the <code>FOOLIB</code> package. If you had remembered to <code><b>USE-PACKAGE</b></code> <code>FOOLIB</code> before you tried to call <code>foo</code>, the reader would have read <code>foo</code> as the inherited symbol and not interned a <code>foo</code> symbol in <code>CL-USER</code>.
+        </p>
+        <p>
+            However, all isn't lost, because the first restart offered by the debugger will patch things up in just the right way: it will unintern the <code>foo</code> symbol from <code>COMMON-LISP-USER</code>, putting the <code>CL-USER</code> package back to the state it was in before you called <code>foo</code>, allowing the <code><b>USE-PACKAGE</b></code> to proceed and allowing for the inherited <code>foo</code> to be available in <code>CL-USER</code>.
+        </p>
+        <p>
+            This kind of problem can also occur when loading and compiling files. For instance, if you defined a package, <code>MY-APP</code>, for code that was going to use functions with names from the <code>FOOLIB</code> package, but forgot to <code>:use</code> <code>FOOLIB</code>, when you compile the files with an <code>(in-package :my-app)</code> in them, the reader will intern new symbols in <code>MY-APP</code> for the names that were supposed to be read as symbols from <code>FOOLIB</code>. When you try to run the compiled code, you'll get undefined function errors. If you then try to redefine the <code>MY-APP</code> package to <code>:use</code> <code>FOOLIB</code>, you'll get the conflicting symbols error. The solution is the same: select the restart to unintern the conflicting symbols from <code>MY-APP</code>. You'll then need to recompile the code in the <code>MY-APP</code> package so it will refer to the inherited names.
+        </p>
+        <p>
+            The next gotcha is essentially the reverse of the first gotcha. In this case, you'd have defined a package--again, let's say it's <code>MY-APP</code>--that uses another package, say, <code>FOOLIB</code>. Now you start writing code in the <code>MY-APP</code> package. Although you used <code>FOOLIB</code> in order to be able to refer to the <code>foo</code> function, <code>FOOLIB</code> may export other symbols as well. If you use one of those exported symbols--say, <code>bar</code>--as the name of a function in your own code, Lisp won't complain. Instead, the name of your function will be the symbol exported by <code>FOOLIB</code>, which will clobber the definition of <code>bar</code> from <code>FOOLIB</code>.
+        </p>
+        <p>
+            This gotcha is more insidious because it doesn't cause an error--from the evaluator's point of view it's just being asked to associate a new function with an old name, something that's perfectly legal. It's suspect only because the code doing the redefining was read with a different value for <code><b>*PACKAGE*</b></code> than the name's package. But the evaluator doesn't necessarily know that. However, in most Lisps you'll get an warning about "<code>redefining BAR, originally defined in</code>?". You should heed those warnings. If you clobber a definition from a library, you can restore it by reloading the library code with <code><b>LOAD</b></code>.<sup>13</sup>
+        </p>
+        <p>
+            The last package-related gotcha is, by comparison, quite trivial, but it bites most Lisp programmers at least a few times: you define a package that uses <code>COMMON-LISP</code> and maybe a few libraries. Then at the REPL you change to that package to play around. Then you decide to quit Lisp altogether and try to call <code>(quit)</code>. However, <code>quit</code> isn't a name from the <code>COMMON-LISP</code> package--it's defined by the implementation in some implementation-specific package that happens to be used by <code>COMMON-LISP-USER</code>. The solution is simple--change packages back to <code>CL-USER</code> to quit. Or use the SLIME REPL shortcut <code>quit</code>, which will also save you from having to remember that in certain Common Lisp implementations the function to quit is <code>exit</code>, not <code>quit</code>.
+        </p>
+        <p>
+            You're almost done with your tour of Common Lisp. In the next chapter I'll discuss the details of the extended <code><b>LOOP</b></code> macro. After that, the rest of the book is devoted to "practicals": a spam filter, a library for parsing binary files, and various parts of a streaming MP3 server with a Web interface.
+        </p>
+        <hr>
+        <div class="notes">
+            <p>
+                <sup>1</sup>The kind of programming that relies on a symbol data type is called, appropriately enough, <i>symbolic</i> computation. It's typically contrasted to <i>numeric</i> programming. An example of a primarily symbolic program that all programmers should be familiar with is a compiler--it treats the text of a program as symbolic data and translates it into a new form.
+            </p>
+            <p>
+                <sup>2</sup>Every package has one official name and zero or more <i>nicknames</i> that can be used anywhere you need to use the package name, such as in package-qualified names or to refer to the package in a <code><b>DEFPACKAGE</b></code> or <code><b>IN-PACKAGE</b></code> form.
+            </p>
+            <p>
+                <sup>3</sup><code>COMMON-LISP-USER</code> is also allowed to provide access to symbols exported by other implementation-defined packages. While this is intended as a convenience for the user--it makes implementation-specific functionality readily accessible--it can also cause confusion for new Lispers: Lisp will complain about an attempt to redefine some name that isn't listed in the language standard. To see what packages <code>COMMON-LISP-USER</code> inherits symbols from in a particular implementation, evaluate this expression at the REPL:
+            </p>
+            <pre>
+(mapcar #'package-name (package-use-list :cl-user))
+</pre>
+            <p>
+                And to find out what package a symbol came from originally, evaluate this:
+            </p>
+            <pre>
+(package-name (symbol-package 'some-symbol))
+</pre>
+            <p>
+                with <code>some-symbol</code> replaced by the symbol in question. For instance:
+            </p>
+            <pre>
+(package-name (symbol-package 'car)) ==&gt; "COMMON-LISP"
+(package-name (symbol-package 'foo)) ==&gt; "COMMON-LISP-USER"
+</pre>
+            <p>
+                Symbols inherited from implementation-defined packages will return some other value.
+            </p>
+            <p>
+                <sup>4</sup>This is different from the Java package system, which provides a namespace for classes but is also involved in Java's access control mechanism. The non-Lisp language with a package system most like Common Lisp's packages is Perl.
+            </p>
+            <p>
+                <sup>5</sup>All the manipulations performed by <code><b>DEFPACKAGE</b></code> can also be performed with functions that man- ipulate package objects. However, since a package generally needs to be fully defined before it can be used, those functions are rarely used. Also, <code><b>DEFPACKAGE</b></code> takes care of performing all the package manipulations in the right order--for instance, <code><b>DEFPACKAGE</b></code> adds symbols to the shadowing list before it tries to use the used packages.
+            </p>
+            <p>
+                <sup>6</sup>In many Lisp implementations the <code>:use</code> clause is optional if you want only to <code>:use</code> <code>COMMON-LISP</code>--if it's omitted, the package will automatically inherit names from an implementation-defined list of packages that will usually include <code>COMMON-LISP</code>. However, your code will be more portable if you always explicitly specify the packages you want to <code>:use</code>. Those who are averse to typing can use the package's nickname and write <code>(:use :cl)</code>.
+            </p>
+            <p>
+                <sup>7</sup>Using keywords instead of strings has another advantage--Allegro provides a "modern mode" Lisp in which the reader does no case conversion of names and in which, instead of a <code><b>COMMON-LISP</b></code> package with uppercase names, provides a <code>common-lisp</code> package with lowercase names. Strictly speaking, this Lisp isn't a conforming Common Lisp since all the names in the standard are defined to be uppercase. But if you write your <code><b>DEFPACKAGE</b></code> forms using keyword symbols, they will work both in Common Lisp and in this near relative.
+            </p>
+            <p>
+                <sup>8</sup>Some folks, instead of keywords, use uninterned symbols, using the <code>#:</code> syntax.
+            </p>
+            <pre>
+(defpackage #:com.gigamonkeys.email-db
+  (:use #:common-lisp))
+</pre>
+            <p>
+                This saves a tiny bit of memory by not interning any symbols in the keyword package--the symbol can become garbage after <code><b>DEFPACKAGE</b></code> (or the code it expands into) is done with it. However, the difference is so slight that it really boils down to a matter of aesthetics.
+            </p>
+            <p>
+                <sup>9</sup>The reason to use <code><b>IN-PACKAGE</b></code> instead of just <code><b>SETF</b></code>ing <code><b>*PACKAGE*</b></code> is that <code><b>IN-PACKAGE</b></code> expands into code that will run when the file is compiled by <code><b>COMPILE-FILE</b></code> as well as when the file is loaded, changing the way the reader reads the rest of the file during compilation.
+            </p>
+            <p>
+                <sup>10</sup>In the REPL buffer in SLIME you can also change packages with a REPL shortcut. Type a comma, and then enter <code>change-package</code> at the <code>Command:</code> prompt.
+            </p>
+            <p>
+                <sup>11</sup>During development, if you try to <code>:use</code> a package that exports a symbol with the same name as a symbol already interned in the using package, Lisp will signal an error and typically offer you a restart that will unintern the offending symbol from the using package. For more on this, see the section "Package Gotchas."
+            </p>
+            <p>
+                <sup>12</sup>The code for the "Practical" chapters, available from this book's Web site, uses the ASDF system definition library. ASDF stands for Another System Definition Facility.
+            </p>
+            <p>
+                <sup>13</sup>Some Common Lisp implementations, such as Allegro and SBCL, provide a facility for "locking" the symbols in a particular package so they can be used in defining forms such as <code><b>DEFUN</b></code>, <code><b>DEFVAR</b></code>, and <code><b>DEFCLASS</b></code> only when their home package is the current package.
+            </p>
+        </div>
+        <div class="copyright">
+            Copyright © 2003-2005, Peter Seibel
+        </div>
+    </body>
+</html>

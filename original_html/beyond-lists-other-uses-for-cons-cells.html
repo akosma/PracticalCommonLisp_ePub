@@ -1,0 +1,335 @@
+<HTML><HEAD><TITLE>Beyond Lists: Other Uses for Cons Cells</TITLE><LINK REL="stylesheet" TYPE="text/css" HREF="style.css"/></HEAD><BODY><DIV CLASS="copyright">Copyright &copy; 2003-2005, Peter Seibel</DIV><H1>13. Beyond Lists: Other Uses for Cons Cells</H1><P>As you saw in the previous chapter, the list data type is an illusion
+created by a set of functions that manipulate cons cells. Common Lisp
+also provides functions that let you treat data structures built out
+of cons cells as trees, sets, and lookup tables. In this chapter I'll
+give you a quick tour of some of these other data structures and the
+functions for manipulating them. As with the list-manipulation
+functions, many of these functions will be useful when you start
+writing more complicated macros and need to manipulate Lisp code as
+data.</P><A NAME="trees"><H2>Trees</H2></A><P>Treating structures built from cons cells as trees is just about as
+natural as treating them as lists. What is a list of lists, after
+all, but another way of thinking of a tree? The difference between a
+function that treats a bunch of cons cells as a list and a function
+that treats the same bunch of cons cells as a tree has to do with
+which cons cells the functions traverse to find the values of the
+list or tree. The cons cells traversed by a list function, called the
+<I>list structure</I>, are found by starting at the first cons cell and
+following <CODE><B>CDR</B></CODE> references until reaching a <CODE><B>NIL</B></CODE>. The elements
+of the list are the objects referenced by the <CODE><B>CAR</B></CODE>s of the cons
+cells in the list structure. If a cons cell in the list structure has
+a <CODE><B>CAR</B></CODE> that references another cons cell, the referenced cons
+cell is considered to be the head of a list that's an element of the
+outer list.<SUP>1</SUP> <I>Tree structure</I>, on the other hand, is traversed by
+following both <CODE><B>CAR</B></CODE> and <CODE><B>CDR</B></CODE> references for as long as they
+point to other cons cells. The values in a tree are thus the
+atomic--non-cons-cell-values referenced by either the <CODE><B>CAR</B></CODE>s or
+the <CODE><B>CDR</B></CODE>s of the cons cells in the tree structure.</P><P>For instance, the following box-and-arrow diagram shows the cons
+cells that make up the list of lists: <CODE>((1 2) (3 4) (5 6))</CODE>. The
+list structure includes only the three cons cells inside the dashed
+box while the tree structure includes all the cons cells. </P><P><IMG CLASS="figure" SRC="figures/list-or-tree.png"/></P><P>To see the difference between a list function and a tree function,
+you can consider how the functions <CODE><B>COPY-LIST</B></CODE> and <CODE><B>COPY-TREE</B></CODE>
+will copy this bunch of cons cells. <CODE><B>COPY-LIST</B></CODE>, as a list
+function, copies the cons cells that make up the list structure. That
+is, it makes a new cons cell corresponding to each of the cons cells
+inside the dashed box. The <CODE><B>CAR</B></CODE>s of each of these new cons cells
+reference the same object as the <CODE><B>CAR</B></CODE>s of the original cons cells
+in the list structure. Thus, <CODE><B>COPY-LIST</B></CODE> doesn't copy the sublists
+<CODE>(1 2)</CODE>, <CODE>(3 4)</CODE>, or <CODE>(5 6)</CODE>, as shown in this
+diagram:</P><P><IMG CLASS="figure" SRC="figures/copy-list-list-or-tree.png"/></P><P><CODE><B>COPY-TREE</B></CODE>, on the other hand, makes a new cons cell for each of
+the cons cells in the diagram and links them together in the same
+structure, as shown in this diagram:</P><P><IMG CLASS="figure" SRC="figures/copy-tree-list-or-tree.png"/></P><P>Where a cons cell in the original referenced an atomic value, the
+corresponding cons cell in the copy will reference the same value.
+Thus, the only objects referenced in common by the original tree and
+the copy produced by <CODE><B>COPY-TREE</B></CODE> are the numbers 5, 6, and the
+symbol <CODE><B>NIL</B></CODE>.</P><P>Another function that walks both the <CODE><B>CAR</B></CODE>s and the <CODE><B>CDR</B></CODE>s of a
+tree of cons cells is <CODE><B>TREE-EQUAL</B></CODE>, which compares two trees,
+considering them equal if the tree structure is the same shape and if
+the leaves are <CODE><B>EQL</B></CODE> (or if they satisfy the test supplied with
+the <CODE>:test</CODE> keyword argument).</P><P>Some other tree-centric functions are the tree analogs to the
+<CODE><B>SUBSTITUTE</B></CODE> and <CODE><B>NSUBSTITUTE</B></CODE> sequence functions and their
+<CODE>-IF</CODE> and <CODE>-IF-NOT</CODE> variants. The function <CODE><B>SUBST</B></CODE>, like
+<CODE><B>SUBSTITUTE</B></CODE>, takes a new item, an old item, and a tree (as
+opposed to a sequence), along with <CODE>:key</CODE> and <CODE>:test</CODE>
+keyword arguments, and it returns a new tree with the same shape as
+the original tree but with all instances of the old item replaced
+with the new item. For example: </P><PRE>CL-USER&gt; (subst 10 1 '(1 2 (3 2 1) ((1 1) (2 2))))
+(10 2 (3 2 10) ((10 10) (2 2)))</PRE><P><CODE><B>SUBST-IF</B></CODE> is analogous to <CODE><B>SUBSTITUTE-IF</B></CODE>. Instead of an old
+item, it takes a one-argument function--the function is called with
+each atomic value in the tree, and whenever it returns true, the
+position in the new tree is filled with the new value.
+<CODE><B>SUBST-IF-NOT</B></CODE> is the same except the values where the test
+returns <CODE><B>NIL</B></CODE> are replaced. <CODE><B>NSUBST</B></CODE>, <CODE><B>NSUBST-IF</B></CODE>, and
+<CODE><B>NSUBST-IF-NOT</B></CODE> are the recycling versions of the <CODE><B>SUBST</B></CODE>
+functions. As with most other recycling functions, you should use
+these functions only as drop-in replacements for their nondestructive
+counterparts in situations where you know there's no danger of
+modifying a shared structure. In particular, you must continue to
+save the return value of these functions since you have no guarantee
+that the result will be <CODE><B>EQ</B></CODE> to the original tree.<SUP>2</SUP> </P><A NAME="sets"><H2>Sets</H2></A><P>Sets can also be implemented in terms of cons cells. In fact, you can
+treat any list as a set--Common Lisp provides several functions for
+performing set-theoretic operations on lists. However, you should
+bear in mind that because of the way lists are structured, these
+operations get less and less efficient the bigger the sets get.</P><P>That said, using the built-in set functions makes it easy to write
+set-manipulation code. And for small sets they may well be more
+efficient than the alternatives. If profiling shows you that these
+functions are a performance bottleneck in your code, you can always
+replace the lists with sets built on top of hash tables or bit
+vectors.</P><P>To build up a set, you can use the function <CODE><B>ADJOIN</B></CODE>. <CODE><B>ADJOIN</B></CODE>
+takes an item and a list representing a set and returns a list
+representing the set containing the item and all the items in the
+original set. To determine whether the item is present, it must scan
+the list; if the item isn't found, <CODE><B>ADJOIN</B></CODE> creates a new cons
+cell holding the item and pointing to the original list and returns
+it. Otherwise, it returns the original list.</P><P><CODE><B>ADJOIN</B></CODE> also takes <CODE>:key</CODE> and <CODE>:test</CODE> keyword
+arguments, which are used when determining whether the item is
+present in the original list. Like <CODE><B>CONS</B></CODE>, <CODE><B>ADJOIN</B></CODE> has no
+effect on the original list--if you want to modify a particular list,
+you need to assign the value returned by <CODE><B>ADJOIN</B></CODE> to the place
+where the list came from. The modify macro <CODE><B>PUSHNEW</B></CODE> does this for
+you automatically. </P><PRE>CL-USER&gt; (defparameter *set* ())
+*SET*
+CL-USER&gt; (adjoin 1 *set*)
+(1)
+CL-USER&gt; *set*
+NIL
+CL-USER&gt; (setf *set* (adjoin 1 *set*))
+(1)
+CL-USER&gt; (pushnew 2 *set*)
+(2 1)
+CL-USER&gt; *set*
+(2 1)
+CL-USER&gt; (pushnew 2 *set*)
+(2 1)</PRE><P>You can test whether a given item is in a set with <CODE><B>MEMBER</B></CODE> and
+the related functions <CODE><B>MEMBER-IF</B></CODE> and <CODE><B>MEMBER-IF-NOT</B></CODE>. These
+functions are similar to the sequence functions <CODE><B>FIND</B></CODE>,
+<CODE><B>FIND-IF</B></CODE>, and <CODE><B>FIND-IF-NOT</B></CODE> except they can be used only with
+lists. And instead of returning the item when it's present, they
+return the cons cell containing the item--in other words, the sublist
+starting with the desired item. When the desired item isn't present
+in the list, all three functions return <CODE><B>NIL</B></CODE>.</P><P>The remaining set-theoretic functions provide bulk operations:
+<CODE><B>INTERSECTION</B></CODE>, <CODE><B>UNION</B></CODE>, <CODE><B>SET-DIFFERENCE</B></CODE>, and
+<CODE><B>SET-EXCLUSIVE-OR</B></CODE>. Each of these functions takes two lists and
+<CODE>:key</CODE> and <CODE>:test</CODE> keyword arguments and returns a new list
+representing the set resulting from performing the appropriate
+set-theoretic operation on the two lists: <CODE><B>INTERSECTION</B></CODE> returns a
+list containing all the elements found in both arguments. <CODE><B>UNION</B></CODE>
+returns a list containing one instance of each unique element from
+the two arguments.<SUP>3</SUP> <CODE><B>SET-DIFFERENCE</B></CODE> returns a list
+containing all the elements from the first argument that don't appear
+in the second argument. And <CODE><B>SET-EXCLUSIVE-OR</B></CODE> returns a list
+containing those elements appearing in only one or the other of the
+two argument lists but not in both. Each of these functions also has
+a recycling counterpart whose name is the same except with an <I>N</I>
+prefix.</P><P>Finally, the function <CODE><B>SUBSETP</B></CODE> takes two lists and the usual
+<CODE>:key</CODE> and <CODE>:test</CODE> keyword arguments and returns true if
+the first list is a subset of the second--if every element in the
+first list is also present in the second list. The order of the
+elements in the lists doesn't matter. </P><PRE>CL-USER&gt; (subsetp '(3 2 1) '(1 2 3 4))
+T
+CL-USER&gt; (subsetp '(1 2 3 4) '(3 2 1))
+NIL</PRE><A NAME="lookup-tables-alists-and-plists"><H2>Lookup Tables: Alists and Plists</H2></A><P>In addition to trees and sets, you can build tables that map keys to
+values out of cons cells. Two flavors of cons-based lookup tables are
+commonly used, both of which I've mentioned in passing in previous
+chapters. They're <I>association lists</I>, also called <I>alists</I>, and
+<I>property lists</I>, also known as <I>plists</I>. While you wouldn't use
+either alists or plists for large tables--for that you'd use a hash
+table--it's worth knowing how to work with them both because for
+small tables they can be more efficient than hash tables and because
+they have some useful properties of their own.</P><P>An alist is a data structure that maps keys to values and also
+supports reverse lookups, finding the key when given a value. Alists
+also support adding key/value mappings that shadow existing mappings
+in such a way that the shadowing mapping can later be removed and the
+original mappings exposed again.</P><P>Under the covers, an alist is essentially a list whose elements are
+themselves cons cells. Each element can be thought of as a key/value
+pair with the key in the cons cell's <CODE><B>CAR</B></CODE> and the value in the
+<CODE><B>CDR</B></CODE>. For instance, the following is a box-and-arrow diagram of
+an alist mapping the symbol <CODE>A</CODE> to the number 1, <CODE>B</CODE> to 2,
+and <CODE>C</CODE> to 3:</P><P><IMG CLASS="figure" SRC="figures/alist-abc-123.png"/></P><P>Unless the value in the <CODE><B>CDR</B></CODE> is a list, cons cells representing
+the key/value pairs will be <I>dotted pairs</I> in s-expression
+notation. The alist diagramed in the previous figure, for instance,
+is printed like this: </P><PRE>((A . 1) (B . 2) (C . 3))</PRE><P>The main lookup function for alists is <CODE><B>ASSOC</B></CODE>, which takes a key
+and an alist and returns the first cons cell whose <CODE><B>CAR</B></CODE> matches
+the key or <CODE><B>NIL</B></CODE> if no match is found.</P><PRE>CL-USER&gt; (assoc 'a '((a . 1) (b . 2) (c . 3)))
+(A . 1)
+CL-USER&gt; (assoc 'c '((a . 1) (b . 2) (c . 3)))
+(C . 3)
+CL-USER&gt; (assoc 'd '((a . 1) (b . 2) (c . 3)))
+NIL</PRE><P>To get the value corresponding to a given key, you simply pass the
+result of <CODE><B>ASSOC</B></CODE> to <CODE><B>CDR</B></CODE>.</P><PRE>CL-USER&gt; (cdr (assoc 'a '((a . 1) (b . 2) (c . 3))))
+1</PRE><P>By default the key given is compared to the keys in the alist using
+<CODE><B>EQL</B></CODE>, but you can change that with the standard combination of
+<CODE>:key</CODE> and <CODE>:test</CODE> keyword arguments. For instance, if you
+wanted to use string keys, you might write this:</P><PRE>CL-USER&gt; (assoc &quot;a&quot; '((&quot;a&quot; . 1) (&quot;b&quot; . 2) (&quot;c&quot; . 3)) :test #'string=)
+(&quot;a&quot; . 1)</PRE><P>Without specifying <CODE>:test</CODE> to be <CODE><B>STRING=</B></CODE>, that <CODE><B>ASSOC</B></CODE>
+would probably return <CODE><B>NIL</B></CODE> because two strings with the same
+contents aren't necessarily <CODE><B>EQL</B></CODE>. </P><PRE>CL-USER&gt; (assoc &quot;a&quot; '((&quot;a&quot; . 1) (&quot;b&quot; . 2) (&quot;c&quot; . 3)))
+NIL</PRE><P>Because <CODE><B>ASSOC</B></CODE> searches the list by scanning from the front of
+the list, one key/value pair in an alist can shadow other pairs with
+the same key later in the list.</P><PRE>CL-USER&gt; (assoc 'a '((a . 10) (a . 1) (b . 2) (c . 3)))
+(A . 10)</PRE><P>You can add a pair to the front of an alist with <CODE><B>CONS</B></CODE> like this:</P><PRE>(cons (cons 'new-key 'new-value) alist)</PRE><P>However, as a convenience, Common Lisp provides the function
+<CODE><B>ACONS</B></CODE>, which lets you write this:</P><PRE>(acons 'new-key 'new-value alist)</PRE><P>Like <CODE><B>CONS</B></CODE>, <CODE><B>ACONS</B></CODE> is a function and thus can't modify the
+place holding the alist it's passed. If you want to modify an alist,
+you need to write either this:</P><PRE>(setf alist (acons 'new-key 'new-value alist))</PRE><P>or this:</P><PRE>(push (cons 'new-key 'new-value) alist)</PRE><P>Obviously, the time it takes to search an alist with <CODE><B>ASSOC</B></CODE> is a
+function of how deep in the list the matching pair is found. In the
+worst case, determining that no pair matches requires <CODE><B>ASSOC</B></CODE> to
+scan every element of the alist. However, since the basic mechanism
+for alists is so lightweight, for small tables an alist can
+outperform a hash table. Also, alists give you more flexibility in
+how you do the lookup. I already mentioned that <CODE><B>ASSOC</B></CODE> takes
+<CODE>:key</CODE> and <CODE>:test</CODE> keyword arguments. When those don't suit
+your needs, you may be able to use the <CODE><B>ASSOC-IF</B></CODE> and
+<CODE><B>ASSOC-IF-NOT</B></CODE> functions, which return the first key/value pair
+whose <CODE><B>CAR</B></CODE> satisfies (or not, in the case of <CODE><B>ASSOC-IF-NOT</B></CODE>)
+the test function passed in the place of a specific item. And three
+functions--<CODE><B>RASSOC</B></CODE>, <CODE><B>RASSOC-IF</B></CODE>, and <CODE><B>RASSOC-IF-NOT</B></CODE>--work
+just like the corresponding <CODE><B>ASSOC</B></CODE> functions except they use the
+value in the <CODE><B>CDR</B></CODE> of each element as the key, performing a
+reverse lookup. </P><P>The function <CODE><B>COPY-ALIST</B></CODE> is similar to <CODE><B>COPY-TREE</B></CODE> except,
+instead of copying the whole tree structure, it copies only the cons
+cells that make up the list structure, plus the cons cells directly
+referenced from the <CODE><B>CAR</B></CODE>s of those cells. In other words, the
+original alist and the copy will both contain the same objects as the
+keys and values, even if those keys or values happen to be made up of
+cons cells.</P><P>Finally, you can build an alist from two separate lists of keys and
+values with the function <CODE><B>PAIRLIS</B></CODE>. The resulting alist may
+contain the pairs either in the same order as the original lists or
+in reverse order. For example, you may get this result:</P><PRE>CL-USER&gt; (pairlis '(a b c) '(1 2 3))
+((C . 3) (B . 2) (A . 1))</PRE><P>Or you could just as well get this:</P><PRE>CL-USER&gt; (pairlis '(a b c) '(1 2 3))
+((A . 1) (B . 2) (C . 3))</PRE><P>The other kind of lookup table is the property list, or plist, which
+you used to represent the rows in the database in Chapter 3.
+Structurally a plist is just a regular list with the keys and values
+as alternating values. For instance, a plist mapping <CODE>A</CODE>,
+<CODE>B</CODE>, and <CODE>C</CODE>, to 1, 2, and 3 is simply the list <CODE>(A 1
+B 2 C 3)</CODE>. In boxes-and-arrows form, it looks like this: </P><P><IMG CLASS="figure" SRC="figures/plist-abc-123.png"/></P><P>However, plists are less flexible than alists. In fact, plists
+support only one fundamental lookup operation, the function
+<CODE><B>GETF</B></CODE>, which takes a plist and a key and returns the associated
+value or <CODE><B>NIL</B></CODE> if the key isn't found. <CODE><B>GETF</B></CODE> also takes an
+optional third argument, which will be returned in place of <CODE><B>NIL</B></CODE>
+if the key isn't found.</P><P>Unlike <CODE><B>ASSOC</B></CODE>, which uses <CODE><B>EQL</B></CODE> as its default test and allows
+a different test function to be supplied with a <CODE>:test</CODE>
+argument, <CODE><B>GETF</B></CODE> always uses <CODE><B>EQ</B></CODE> to test whether the provided
+key matches the keys in the plist. Consequently, you should never use
+numbers or characters as keys in a plist; as you saw in Chapter 4,
+the behavior of <CODE><B>EQ</B></CODE> for those types is essentially undefined.
+Practically speaking, the keys in a plist are almost always symbols,
+which makes sense since plists were first invented to implement
+symbolic &quot;properties,&quot; arbitrary mappings between names and values.</P><P>You can use <CODE><B>SETF</B></CODE> with <CODE><B>GETF</B></CODE> to set the value associated with
+a given key. <CODE><B>SETF</B></CODE> also treats <CODE><B>GETF</B></CODE> a bit specially in that
+the first argument to <CODE><B>GETF</B></CODE> is treated as the place to modify.
+Thus, you can use <CODE><B>SETF</B></CODE> of <CODE><B>GETF</B></CODE> to add a new key/value pair
+to an existing plist. </P><PRE>CL-USER&gt; (defparameter *plist* ())
+*PLIST*
+CL-USER&gt; *plist*
+NIL
+CL-USER&gt; (setf (getf *plist* :a) 1)
+1
+CL-USER&gt; *plist*
+(:A 1)
+CL-USER&gt; (setf (getf *plist* :a) 2)
+2
+CL-USER&gt; *plist*
+(:A 2)</PRE><P>To remove a key/value pair from a plist, you use the macro <CODE><B>REMF</B></CODE>,
+which sets the place given as its first argument to a plist
+containing all the key/value pairs except the one specified. It
+returns true if the given key was actually found. </P><PRE>CL-USER&gt; (remf *plist* :a)
+T
+CL-USER&gt; *plist*
+NIL</PRE><P>Like <CODE><B>GETF</B></CODE>, <CODE><B>REMF</B></CODE> always uses <CODE><B>EQ</B></CODE> to compare the given
+key to the keys in the plist.</P><P>Since plists are often used in situations where you want to extract
+several properties from the same plist, Common Lisp provides a
+function, <CODE><B>GET-PROPERTIES</B></CODE>, that makes it more efficient to extract
+multiple values from a single plist. It takes a plist and a list of
+keys to search for and returns, as multiple values, the first key
+found, the corresponding value, and the head of the list starting with
+the found key. This allows you to process a property list, extracting
+the desired properties, without continually rescanning from the front
+of the list. For instance, the following function efficiently
+processes--using the hypothetical function
+<CODE>process-property</CODE>--all the key/value pairs in a plist for a
+given list of keys:</P><PRE>(defun process-properties (plist keys)
+  (loop while plist do
+       (multiple-value-bind (key value tail) (get-properties plist keys)
+         (when key (process-property key value))
+         (setf plist (cddr tail)))))</PRE><P>The last special thing about plists is the relationship they have
+with symbols: every symbol object has an associated plist that can be
+used to store information about the symbol. The plist can be obtained
+via the function <CODE><B>SYMBOL-PLIST</B></CODE>. However, you rarely care about
+the whole plist; more often you'll use the functions <CODE><B>GET</B></CODE>, which
+takes a symbol and a key and is shorthand for a <CODE><B>GETF</B></CODE> of the same
+key in the symbols <CODE><B>SYMBOL-PLIST</B></CODE>.</P><PRE>(get 'symbol 'key) === (getf (symbol-plist 'symbol) 'key)</PRE><P>Like <CODE><B>GETF</B></CODE>, <CODE><B>GET</B></CODE> is <CODE><B>SETF</B></CODE>able, so you can attach
+arbitrary information to a symbol like this:</P><PRE>(setf (get 'some-symbol 'my-key) &quot;information&quot;)</PRE><P>To remove a property from a symbol's plist, you can use either
+<CODE><B>REMF</B></CODE> of <CODE><B>SYMBOL-PLIST</B></CODE> or the convenience function
+<CODE><B>REMPROP</B></CODE>.<SUP>4</SUP></P><PRE>(remprop 'symbol 'key) === (remf (symbol-plist 'symbol key))</PRE><P>Being able to attach arbitrary information to names is quite handy
+when doing any kind of symbolic programming. For instance, one of the
+macros you'll write in Chapter 24 will attach information to names
+that other instances of the same macros will extract and use when
+generating their expansions. </P><A NAME="destructuring-bind"><H2>DESTRUCTURING-BIND</H2></A><P>One last tool for slicing and dicing lists that I need to cover since
+you'll need it in later chapters is the <CODE><B>DESTRUCTURING-BIND</B></CODE>
+macro. This macro provides a way to <I>destructure</I> arbitrary lists,
+similar to the way macro parameter lists can take apart their
+argument list. The basic skeleton of a <CODE><B>DESTRUCTURING-BIND</B></CODE> is as
+follows:</P><PRE>(destructuring-bind (<I>parameter</I>*) <I>list</I>
+  <I>body-form</I>*)</PRE><P>The parameter list can include any of the types of parameters
+supported in macro parameter lists such as <CODE><B>&amp;optional</B></CODE>,
+<CODE><B>&amp;rest</B></CODE>, and <CODE><B>&amp;key</B></CODE> parameters.<SUP>5</SUP> And, as in macro parameter lists, any parameter can be
+replaced with a nested destructuring parameter list, which takes
+apart the list that would otherwise have been bound to the replaced
+parameter. The <I>list</I> form is evaluated once and should return a
+list, which is then destructured and the appropriate values are bound
+to the variables in the parameter list. Then the <I>body-forms</I> are
+evaluated in order with those bindings in effect. Some simple
+examples follow: </P><PRE>(destructuring-bind (x y z) (list 1 2 3)
+  (list :x x :y y :z z)) ==&gt; (:X 1 :Y 2 :Z 3)
+
+(destructuring-bind (x y z) (list 1 (list 2 20) 3)
+  (list :x x :y y :z z)) ==&gt; (:X 1 :Y (2 20) :Z 3)
+
+(destructuring-bind (x (y1 y2) z) (list 1 (list 2 20) 3)
+  (list :x x :y1 y1 :y2 y2 :z z)) ==&gt; (:X 1 :Y1 2 :Y2 20 :Z 3)
+
+(destructuring-bind (x (y1 &amp;optional y2) z) (list 1 (list 2 20) 3)
+  (list :x x :y1 y1 :y2 y2 :z z)) ==&gt; (:X 1 :Y1 2 :Y2 20 :Z 3)
+
+(destructuring-bind (x (y1 &amp;optional y2) z) (list 1 (list 2) 3)
+  (list :x x :y1 y1 :y2 y2 :z z)) ==&gt; (:X 1 :Y1 2 :Y2 NIL :Z 3)
+
+(destructuring-bind (&amp;key x y z) (list :x 1 :y 2 :z 3)
+  (list :x x :y y :z z)) ==&gt; (:X 1 :Y 2 :Z 3)
+
+(destructuring-bind (&amp;key x y z) (list :z 1 :y 2 :x 3)
+  (list :x x :y y :z z)) ==&gt; (:X 3 :Y 2 :Z 1)</PRE><P>One kind of parameter you can use with <CODE><B>DESTRUCTURING-BIND</B></CODE> and
+also in macro parameter lists, though I didn't mention it in Chapter
+8, is a <CODE><B>&amp;whole</B></CODE> parameter. If specified, it must be the first
+parameter in a parameter list, and it's bound to the whole list
+form.<SUP>6</SUP> After a <CODE><B>&amp;whole</B></CODE> parameter, other parameters
+can appear as usual and will extract specific parts of the list just
+as they would if the <CODE><B>&amp;whole</B></CODE> parameter weren't there. An example
+of using <CODE><B>&amp;whole</B></CODE> with <CODE><B>DESTRUCTURING-BIND</B></CODE> looks like this:</P><PRE>(destructuring-bind (&amp;whole whole &amp;key x y z) (list :z 1 :y 2 :x 3)
+  (list :x x :y y :z z :whole whole))
+==&gt; (:X 3 :Y 2 :Z 1 :WHOLE (:Z 1 :Y 2 :X 3))</PRE><P>You'll use a <CODE><B>&amp;whole</B></CODE> parameter in one of the macros that's part
+of the HTML generation library you'll develop in Chapter 31. However,
+I have a few more topics to cover before you can get to that. After
+two chapters on the rather Lispy topic of cons cells, you can now
+turn to the more prosaic matter of how to deal with files and
+filenames. 
+</P><HR/><DIV CLASS="notes"><P><SUP>1</SUP>It's possible to build a chain of cons cells where
+the <CODE><B>CDR</B></CODE> of the last cons cell isn't <CODE><B>NIL</B></CODE> but some other
+atom. This is called a <I>dotted</I> list because the last cons is a
+dotted pair.</P><P><SUP>2</SUP>It may
+seem that the <CODE><B>NSUBST</B></CODE> family of functions can and in fact does
+modify the tree in place. However, there's one edge case: when the
+&quot;tree&quot; passed is, in fact, an atom, it can't be modified in place, so
+the result of <CODE><B>NSUBST</B></CODE> will be a different object than the
+argument: <CODE>(nsubst 'x 'y 'y)  X</CODE>.</P><P><SUP>3</SUP><CODE><B>UNION</B></CODE> takes only one element from each
+list, but if either list contains duplicate elements, the result may
+also contain duplicates.</P><P><SUP>4</SUP>It's also possible to directly <CODE><B>SETF
+SYMBOL-PLIST</B></CODE>. However, that's a bad idea, as different code may have
+added different properties to the symbol's plist for different
+reasons. If one piece of code clobbers the symbol's whole plist, it
+may break other code that added its own properties to the plist.</P><P><SUP>5</SUP>Macro parameter lists do
+support one parameter type, <CODE><B>&amp;environment</B></CODE> parameters, which
+<CODE><B>DESTRUCTURING-BIND</B></CODE> doesn't. However, I didn't discuss that
+parameter type in Chapter 8, and you don't need to worry about it now
+either.</P><P><SUP>6</SUP>When a <CODE><B>&amp;whole</B></CODE> parameter is used in a macro parameter
+list, the form it's bound to is the whole macro form, including the
+name of the macro.</P></DIV></BODY></HTML>
