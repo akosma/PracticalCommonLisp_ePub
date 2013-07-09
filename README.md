@@ -10,9 +10,26 @@ iPad](http://www.apple.com/ipad/features/ibooks.html).
 Build
 -----
 
-To build the ePub just run `make` at the command line. The `Makefile`
-depends on [Pandoc](http://johnmacfarlane.net/pandoc/) to create the
-file.
+The `Makefile` depends on [Pandoc](http://johnmacfarlane.net/pandoc/) to
+create the eBooks. If you have
+[Kindlegen](http://www.amazon.com/gp/feature.html?ie=UTF8&docId=1000765211)
+you can generate an eBook that is readable on the Kindle.
+
+To build the ePub just run any of the following commands at the command line:
+
+- `make` will generate the PDF, ePub and Kindle files.
+- `make pdf`, `make epub` and `make kindle` will only generate the
+  requested format.
+
+The files will be available in the `_build` folder after the operation
+completes.
+
+Troubleshooting
+---------------
+
+If you reuse this Makefile to create your own eBooks, make sure that the
+input files are saved with the UTF-8 encoding, which is the one that
+Pandoc expects.
 
 Download
 --------
