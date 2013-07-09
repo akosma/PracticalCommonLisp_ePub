@@ -2,10 +2,7 @@ Common List Book in ePub Format
 ===============================
 
 This is an unofficial ePub version of the Practical Common Lisp book
-[available online](http://www.gigamonkeys.com/book/). The HTML of the
-website has been downloaded adapted to be processed with Calibre into an
-ePub file, which can be read with [iBooks on the
-iPad](http://www.apple.com/ipad/features/ibooks.html).
+[available online](http://www.gigamonkeys.com/book/). 
 
 Build
 -----
