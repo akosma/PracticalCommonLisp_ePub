@@ -104,7 +104,7 @@ CL-USER&gt; "hello, world"
             However, this may not really qualify as a "hello, world" <i>program</i>. It's more like the "hello, world" <i>value</i>.
         </p>
         <p>
-            You can take a step toward a real program by writing some code that as a side effect prints the string "hello, world" to standard output. Common Lisp provides a couple ways to emit output, but the most flexible is the <code><b>FORMAT</b></code> function. <code><b>FORMAT</b></code> takes a variable number of arguments, but the only two required arguments are the place to send the output and a string. You'll see in the next chapter how the string can contain embedded directives that allow you to interpolate subsequent arguments into the string, à la <code>printf</code> or Python's string-<code>%</code>. As long as the string doesn't contain an <code>~</code>, it will be emitted as-is. If you pass <code>t</code> as its first argument, it sends its output to standard output. So a <code><b>FORMAT</b></code> expression that will print "hello, world" looks like this:<sup>8</sup>
+            You can take a step toward a real program by writing some code that as a side effect prints the string "hello, world" to standard output. Common Lisp provides a couple ways to emit output, but the most flexible is the <code><b>FORMAT</b></code> function. <code><b>FORMAT</b></code> takes a variable number of arguments, but the only two required arguments are the place to send the output and a string. You'll see in the next chapter how the string can contain embedded directives that allow you to interpolate subsequent arguments into the string, Ã  la <code>printf</code> or Python's string-<code>%</code>. As long as the string doesn't contain an <code>~</code>, it will be emitted as-is. If you pass <code>t</code> as its first argument, it sends its output to standard output. So a <code><b>FORMAT</b></code> expression that will print "hello, world" looks like this:<sup>8</sup>
         </p>
         <pre>
 CL-USER&gt; (format t "hello, world")
@@ -319,7 +319,7 @@ T
             </p>
         </div>
         <div class="copyright">
-            Copyright © 2003-2005, Peter Seibel
+            Copyright Â© 2003-2005, Peter Seibel
         </div>
     </body>
 </html>
