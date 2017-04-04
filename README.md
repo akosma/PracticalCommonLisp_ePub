@@ -1,5 +1,5 @@
-Common List Book in ePub Format
-===============================
+Practical Common Lisp Book in ePub Format
+=========================================
 
 This is an unofficial ePub version of the Practical Common Lisp book
 [available online](http://www.gigamonkeys.com/book/). 
