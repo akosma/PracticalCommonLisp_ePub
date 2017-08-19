@@ -12,7 +12,7 @@ SHELL = /bin/bash
 #  Constants
 DIR = _build
 OUTPUT = Practical_Common_Lisp
-KINDLEGEN = $(which kindlegen)
+KINDLEGEN = $(shell which kindlegen)
 GENERALOPTS = --smart --standalone --table-of-contents -V title:"Practical Common Lisp" -V author:"Peter Seibel" -V date:"June 29, 2012 - Build ${BUILD}"
 PDFOPTS = --chapters ${GENERALOPTS}
 EPUBOPTS = ${GENERALOPTS}
@@ -58,8 +58,30 @@ create_epub: create_folder
 	pandoc ${EPUBOPTS} -o ${OUTPUT}.epub ${HTML_FILES}
 
 #  Create Kindle version (ignoring the error that it outputs)
+#    In this rule, we use anonymous pipe, which idea comes from
+#    https://superuser.com/questions/184307/bash-create-anonymous-fifo,
+#    in order to check the output genereated by kindlegen.  Because
+#    kindlegen returns 1 when there is a warning even if the
+#    generaiting ebub is successful.
 create_kindle: create_epub
-	@if [[ ! -z "${KINDLEGEN}" ]]; then ${KINDLEGEN} ${DIR}/${OUTPUT}.epub; else echo "KindleGen cannot be found - unable to create Kindle format"; fi
+	@if [[ ! -z "${KINDLEGEN}" ]]; \
+	then \
+		kindlegen_log=$$(mktemp -u); \
+		mkfifo $$kindlegen_log; \
+		exec 3<>$$kindlegen_log; \
+		rm $$kindlegen_log; \
+		${KINDLEGEN} ${DIR}/${OUTPUT}.epub >&3 2>&3; \
+		if (( $$? == 1 )); \
+		then \
+			grep -q "Mobi file built with WARNINGS" <&3; \
+			if (( $$? == 0 )); \
+			then \
+				echo "KindleGen was successful to produle ${DIR}/${OUTPUT}.mobi."; \
+			fi; \
+		fi; \
+	else \
+		echo "KindleGen cannot be found - unable to create Kindle format"; \
+	fi
 
 #  Clean up, so that only the product files remain
 remove_files: create_folder
